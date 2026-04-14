@@ -58,3 +58,9 @@ Thumbs.db
 .secrets/
 libraries/plugins/src/plugins.ts
 i18n.cache
+
+# Uploaded media files
+apps/backend/undefined/
+
+# Node.js compile cache
+node-compile-cache/
