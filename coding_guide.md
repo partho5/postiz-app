@@ -58,7 +58,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.8 — Prisma: `activity_log` + migration
 - [x] 0.9 — Prisma: `capability_gaps` + migration
 - [x] 0.10 — Prisma: `chat_messages` + migration
-- [ ] 0.11 — Encryption utility for per-tenant secrets
+- [x] 0.11 — Encryption utility for per-tenant secrets
 - [ ] 0.12 — Prisma: `platform_keys` + CRUD service
 - [ ] 0.13 — Pre-flight pipeline skeleton (plan gate → credit gate → dispatch)
 - [ ] 0.14 — Activity logger helper + credit debit helper
@@ -203,6 +203,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **Env validation is non-fatal warnings** by default — `ConfigurationChecker` only logs, does not throw. To make `AP_ENCRYPTION_KEY` fail-fast, add a throw inside `check()` when autopilot module is enabled.
 - **Module pattern**: Most shared backend logic lives in `libraries/nestjs-libraries/src/`, not `apps/backend/src/`. Put autopilot services/repositories in `libraries/nestjs-libraries/src/autopilot/` and expose via an `AutopilotModule` imported in `app.module.ts`.
 - **Root path alias for our new code**: `@gitroom/autopilot/*` → `libraries/nestjs-libraries/src/autopilot/*` (added to `tsconfig.base.json` in slice 0.2). Use `@gitroom/autopilot/skills`, `@gitroom/autopilot/agents`, etc. to import from autopilot subdirectories.
+- **Running autopilot unit tests**: `node_modules/.bin/jest --config=libraries/nestjs-libraries/jest.config.js --testPathPattern=<pattern>`. Config created in slice 0.11 (ts-jest 29, no NX dependency). `@nx/jest` is NOT installed — do not reference it.
 
 ---
 
@@ -507,6 +508,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-15 | 0.8 | done | schema.prisma (ApActivityLog model + ApActivityLogStatus enum + Organization/User back-relations); db push applied; client regenerated
 2026-04-15 | 0.9 | done | schema.prisma (ApCapabilityGap model + Organization back-relation); db push applied
 2026-04-15 | 0.10 | done | schema.prisma (ApChatMessage model + ApChatMessageRole/Source enums + Organization back-relation); db push applied
+2026-04-15 | 0.11 | done | autopilot/encryption/index.ts (AES-256-GCM); index.spec.ts (6 tests pass); libraries/nestjs-libraries/jest.config.js (ts-jest setup)
 <!-- entries end -->
 
 ---
