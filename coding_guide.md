@@ -52,7 +52,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.2 — Create empty module directory structure per §Module layout
 - [x] 0.3 — Skill registry core types (no skills yet)
 - [x] 0.4 — `tiers.ts` scaffold with one MVP tier (Free)
-- [ ] 0.5 — `skill-costs.ts` scaffold
+- [x] 0.5 — `skill-costs.ts` scaffold
 - [ ] 0.6 — Agent base types (system prompt, scoped skills, ctx)
 - [ ] 0.7 — Prisma: `credit_ledger` + migration
 - [ ] 0.8 — Prisma: `activity_log` + migration
@@ -501,6 +501,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-15 | 0.2 | done | libraries/nestjs-libraries/src/autopilot/ (14 index.ts placeholders), tsconfig.base.json
 2026-04-15 | 0.3 | done | autopilot/skills/types.ts (new), autopilot/skills/index.ts
 2026-04-15 | 0.4 | done | autopilot/tiers.ts (new)
+2026-04-15 | 0.5 | done | autopilot/skill-costs.ts (new)
 <!-- entries end -->
 
 ---
