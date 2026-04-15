@@ -47,7 +47,7 @@ Then commit with message `slice(<id>): <short summary>` (see §Commit style).
 Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done is met.
 
 ### Phase 0 — Foundation
-- [ ] 0.0 — Map repo + populate Architecture cheat sheet
+- [x] 0.0 — Map repo + populate Architecture cheat sheet
 - [ ] 0.1 — Add env vars and validation for autopilot module
 - [ ] 0.2 — Create empty module directory structure per §Module layout
 - [ ] 0.3 — Skill registry core types (no skills yet)
@@ -147,35 +147,42 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 > **Populated by slice 0.0.** If you learn something new in any slice, update the relevant entry here instead of re-discovering next session.
 
 ### Repo shape (Postiz monorepo)
-- Root: `/home/haku/projects/Typescript/postiz-app`
-- Monorepo tool: NX, package manager `pnpm`.
+- Root: `/home/kaleb/postiz-app`
+- Monorepo tool: **pnpm workspaces** (NOT NX). `pnpm-workspace.yaml` lists `apps/*` and `libraries/*`. Package manager: `pnpm`.
 - Apps (top-level in `apps/`):
   - `apps/backend` — NestJS API
-  - `apps/frontend` — Next.js UI
+  - `apps/frontend` — Next.js UI (App Router)
   - `apps/workers` — BullMQ consumers
-  - `apps/cron` — scheduled jobs
+  - `apps/cron` — scheduled jobs (`@nestjs/schedule` + `BullMqClient`)
   - `apps/commands` — CLI tasks
   - `apps/extension` — **Postiz's own extension; NOT our browser automation extension.** Do not modify for autopilot work.
   - `apps/sdk` — Postiz public SDK
 - Libraries:
   - `libraries/nestjs-libraries` — shared backend code (most Postiz backend logic lives here)
-  - `libraries/react-shared-libraries` — shared frontend code
-  - `libraries/helpers` — utilities
+  - `libraries/react-shared-libraries` — shared frontend code (`form`, `helpers`, `translation`, `toaster`, `sentry`)
+  - `libraries/helpers` — utilities (auth, fetch, config checker, swagger)
+- TypeScript path aliases (from `tsconfig.base.json`):
+  - `@gitroom/backend/*` → `apps/backend/src/*`
+  - `@gitroom/nestjs-libraries/*` → `libraries/nestjs-libraries/src/*`
+  - `@gitroom/frontend/*` → `apps/frontend/src/*`
+  - `@gitroom/helpers/*` → `libraries/helpers/src/*`
+  - `@gitroom/react/*` → `libraries/react-shared-libraries/src/*`
+  - `@gitroom/workers/*` → `apps/workers/src/*`
 
 ### Paths to locate in slice 0.0 and record here
-- Prisma schema: _TBD — find with glob `**/schema.prisma`_
-- DB migrations dir: _TBD_
-- Backend module root & module registration convention: _TBD_
-- BullMQ setup + existing queues: _TBD_
-- Existing env validation (Joi/zod/class-validator?): _TBD_
-- Existing auth guard(s) + session shape: _TBD_
-- Resend email helper: _TBD_
-- Media upload flow: _TBD_
-- Publisher entry point (where a scheduled post becomes an integration call): _TBD_
-- Postiz's org/tenant model: name of table(s) and relation to user: _TBD_
-- Frontend app router / pages entry: _TBD_
-- Shared UI components dir: _TBD_
-- i18n config: _TBD (see `i18n.json`)_
+- **Prisma schema**: `libraries/nestjs-libraries/src/database/prisma/schema.prisma`
+- **DB push command**: `pnpm prisma-db-push` (root package.json script). **Postiz uses `db push`, NOT migrations — there is no `migrations/` directory.** All Prisma schema additions go in `schema.prisma`, then run `prisma-db-push` to sync. Client regen: `pnpm prisma-generate`.
+- **Backend module registration convention**: Add module to `imports[]` in `apps/backend/src/app.module.ts`. Implement the module under `libraries/nestjs-libraries/src/` (e.g., `ChatModule`, `AgentModule`). For authenticated HTTP controllers, also add to `authenticatedController` array in `apps/backend/src/api/api.module.ts`, which auto-applies `AuthMiddleware`.
+- **BullMQ setup**: Module at `libraries/nestjs-libraries/src/bull-mq-transport-new/bull.mq.module.ts`, client is `BullMqClient` (injected via DI). Emit jobs: `this._workerServiceProducer.emit('<queue>', { id, options: { delay }, payload })`. **Existing queue names**: `post`, `submit`, `sendDigestEmail`, `webhooks`, `cron`, `plugs`, `internal-plugs`, `sync_all_stars`. Workers consume via `@EventPattern('<queue>', Transport.REDIS)` in `apps/workers/src/app/posts.controller.ts`.
+- **Env validation**: Custom `ConfigurationChecker` class at `libraries/helpers/src/configuration/configuration.checker.ts`. Called at end of `apps/backend/src/main.ts::checkConfiguration()`. Add autopilot checks by calling `checker.checkNonEmpty(key)` or `checker.checkIsValidUrl(key)` inside the `check()` method. No Joi/Zod — it's a plain class with manual checks that log warnings (non-fatal by default).
+- **Auth guard + session shape**: `AuthMiddleware` at `apps/backend/src/services/auth/auth.middleware.ts`. JWT from cookie `auth` or header `auth`, verified via `AuthService.verifyJWT()` (`@gitroom/helpers/auth/auth.service`). Sets `req.user: User` (Prisma User type) and `req.org: Organization` (with `.users[0].role`). Global `PoliciesGuard` (`apps/backend/src/services/auth/permissions/permissions.guard.ts`) handles ability-based access; use `@CheckPolicies()` decorator from `permissions.ability.ts`. Public routes bypass auth middleware.
+- **Resend email helper**: Provider at `libraries/nestjs-libraries/src/emails/resend.provider.ts`. Use via `EmailService` (`@gitroom/nestjs-libraries/services/email.service`). Call `emailService.sendEmail(to, subject, html, replyTo?)`.
+- **Media upload flow**: `UploadModule` from `@gitroom/nestjs-libraries/upload/upload.module`; imported in `ApiModule`. Media stored via `STORAGE_PROVIDER` env var. Frontend uploads hit `apps/frontend/src/app/(app)/api/uploads/[[...path]]/route.ts`.
+- **Publisher entry point**: `apps/workers/src/app/posts.controller.ts` → `@EventPattern('post')` → `PostsService.post(id)` (at `libraries/nestjs-libraries/src/database/prisma/posts/posts.service.ts:293`) → `postSocial()` → `integrationManager.getSocialIntegration(provider).post(internalId, token, posts)`. The integration `.post()` method is the final call to the platform API.
+- **Postiz org/tenant model**: `Organization` (PascalCase, no `@@map`) is the tenant. Users linked via `UserOrganization` junction (fields: `userId`, `organizationId`, `role: Role`, `disabled`). In request context: `req.org: Organization` (with `org.users` array for current user's membership). `req.org.id` = tenantId throughout the app.
+- **Frontend app router**: `apps/frontend/src/app/(app)/(site)/` for authenticated pages. Route groups: `(app)` wraps everything, `(site)` for main app pages, `(preview)` for public post previews. Shared layout component: `apps/frontend/src/components/new-layout/layout.component`. Page-level components live in `apps/frontend/src/components/`.
+- **Shared UI components dir**: `apps/frontend/src/components/` for app-specific; `libraries/react-shared-libraries/src/` for shared (`form/button`, `helpers/variable.context`, `translation/*`). No centralized shadcn/ui or design-system library — Postiz rolls its own components.
+- **i18n config**: `i18n.json` at repo root, consumed via `@gitroom/react/translation/get.transation.service.client` (`useT()` hook client-side) and `@gitroom/react/translation/get.transation.service.server` server-side.
 
 ### Conventions we're adopting (our code only; don't change Postiz's existing conventions)
 - New backend code for autopilot goes under a dedicated module (path decided in slice 0.2).
@@ -189,7 +196,13 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - Never write directly to config tables from a chat handler — always via the confirm pipeline.
 
 ### Non-obvious gotchas (append as discovered)
-- _TBD_
+- **No Prisma migrations** — Postiz uses `prisma db push` exclusively. When slice definitions say "migration generated/applied," interpret as: add model to `schema.prisma`, run `pnpm prisma-db-push`, regenerate client with `pnpm prisma-generate`.
+- **No `@@map` anywhere in schema** — Postiz table names in Postgres match the PascalCase model name exactly (Prisma default). Our `ap_` prefix must be set via `@@map("ap_credit_ledger")` etc.
+- **`credits` table already exists** in Postiz (model `Credits`, tracks AI image credits). Our ledger table MUST use `@@map("ap_credit_ledger")` to avoid collision; do not reuse Postiz's Credits table.
+- **`subscriptions` table already exists** in Postiz (model `Subscription`). Our autopilot subscription table must be `@@map("ap_subscriptions")`.
+- **Env validation is non-fatal warnings** by default — `ConfigurationChecker` only logs, does not throw. To make `AP_ENCRYPTION_KEY` fail-fast, add a throw inside `check()` when autopilot module is enabled.
+- **Module pattern**: Most shared backend logic lives in `libraries/nestjs-libraries/src/`, not `apps/backend/src/`. Put autopilot services/repositories in `libraries/nestjs-libraries/src/autopilot/` and expose via an `AutopilotModule` imported in `app.module.ts`.
+- **Root path alias for our new code**: We'll add `@gitroom/autopilot/*` → `libraries/nestjs-libraries/src/autopilot/*` in `tsconfig.base.json` once the directory is created (slice 0.2).
 
 ---
 
@@ -483,6 +496,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 ```
 
 <!-- entries begin -->
+2026-04-15 | 0.0 | done | coding_guide.md
 <!-- entries end -->
 
 ---
