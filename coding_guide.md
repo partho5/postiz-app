@@ -60,7 +60,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.10 — Prisma: `chat_messages` + migration
 - [x] 0.11 — Encryption utility for per-tenant secrets
 - [x] 0.12 — Prisma: `platform_keys` + CRUD service
-- [ ] 0.13 — Pre-flight pipeline skeleton (plan gate → credit gate → dispatch)
+- [x] 0.13 — Pre-flight pipeline skeleton (plan gate → credit gate → dispatch)
 - [ ] 0.14 — Activity logger helper + credit debit helper
 - [ ] 0.15 — Capability gap logger helper
 - [ ] 0.16 — Vercel AI SDK wiring + provider selection helper
@@ -510,6 +510,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-15 | 0.10 | done | schema.prisma (ApChatMessage model + ApChatMessageRole/Source enums + Organization back-relation); db push applied
 2026-04-15 | 0.11 | done | autopilot/encryption/index.ts (AES-256-GCM); index.spec.ts (6 tests pass); libraries/nestjs-libraries/jest.config.js (ts-jest setup)
 2026-04-15 | 0.12 | done | schema.prisma (ApPlatformKey model + Organization back-relation); db push applied; autopilot/platform_keys/index.ts (set/get/del); index.spec.ts (7 tests pass)
+2026-04-15 | 0.13 | done | autopilot/pipeline.ts (PipelineContext/Result types, plan gate, credit gate, skill dispatch, stubs for 0.14/0.15); registerSkillGate() exported; pipeline.spec.ts (9 tests pass)
 <!-- entries end -->
 
 ---
