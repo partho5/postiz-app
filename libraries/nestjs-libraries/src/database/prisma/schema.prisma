@@ -45,6 +45,7 @@ model Organization {
   apCreditLedger    ApCreditLedger[]
   apActivityLog     ApActivityLog[]
   apCapabilityGap   ApCapabilityGap[]
+  apChatMessage     ApChatMessage[]
 }
 
 model Tags {
@@ -797,4 +798,31 @@ model ApCapabilityGap {
 
   @@index([organizationId, createdAt(sort: Desc)])
   @@map("ap_capability_gap")
+}
+
+model ApChatMessage {
+  id             String               @id @default(uuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id])
+  role           ApChatMessageRole
+  content        String
+  source         ApChatMessageSource
+  metadata       Json                 @default("{}")
+  createdAt      DateTime             @default(now())
+
+  @@index([organizationId, createdAt])
+  @@map("ap_chat_message")
+}
+
+enum ApChatMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum ApChatMessageSource {
+  WEB
+  TELEGRAM
+  API
 }

@@ -57,7 +57,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.7 — Prisma: `credit_ledger` + migration
 - [x] 0.8 — Prisma: `activity_log` + migration
 - [x] 0.9 — Prisma: `capability_gaps` + migration
-- [ ] 0.10 — Prisma: `chat_messages` + migration
+- [x] 0.10 — Prisma: `chat_messages` + migration
 - [ ] 0.11 — Encryption utility for per-tenant secrets
 - [ ] 0.12 — Prisma: `platform_keys` + CRUD service
 - [ ] 0.13 — Pre-flight pipeline skeleton (plan gate → credit gate → dispatch)
@@ -506,6 +506,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-15 | 0.7 | done | schema.prisma (ApCreditLedger model + ApCreditLedgerReason enum + Organization back-relation); db push applied; client regenerated
 2026-04-15 | 0.8 | done | schema.prisma (ApActivityLog model + ApActivityLogStatus enum + Organization/User back-relations); db push applied; client regenerated
 2026-04-15 | 0.9 | done | schema.prisma (ApCapabilityGap model + Organization back-relation); db push applied
+2026-04-15 | 0.10 | done | schema.prisma (ApChatMessage model + ApChatMessageRole/Source enums + Organization back-relation); db push applied
 <!-- entries end -->
 
 ---
