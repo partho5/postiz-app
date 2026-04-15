@@ -5,6 +5,7 @@ import { resolve } from 'path';
 export class ConfigurationChecker {
   cfg: dotenv.DotenvParseOutput;
   issues: string[] = [];
+  fatalIssues: string[] = [];
 
   readEnvFromFile() {
     const envFile = resolve(__dirname, '../../../.env');
@@ -31,6 +32,28 @@ export class ConfigurationChecker {
     this.checkIsValidUrl('NEXT_PUBLIC_BACKEND_URL');
     this.checkIsValidUrl('BACKEND_INTERNAL_URL');
     this.checkNonEmpty('STORAGE_PROVIDER', 'Needed to setup storage.');
+    this.checkAutopilot();
+  }
+
+  checkAutopilot() {
+    if (this.get('AP_ENABLED') !== 'true') {
+      return;
+    }
+    this.checkFatal(
+      'AP_ENCRYPTION_KEY',
+      'Required for autopilot. Generate with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"'
+    );
+  }
+
+  checkFatal(key: string, description?: string): boolean {
+    const v = this.get(key);
+    if (!v || v.length === 0) {
+      this.fatalIssues.push(
+        `${key} not set. ${description ?? ''} Boot cannot continue.`
+      );
+      return false;
+    }
+    return true;
   }
 
   checkNonEmpty(key: string, description?: string): boolean {
@@ -106,5 +129,13 @@ export class ConfigurationChecker {
 
   getIssuesCount() {
     return this.issues.length;
+  }
+
+  hasFatalIssues() {
+    return this.fatalIssues.length > 0;
+  }
+
+  getFatalIssues() {
+    return this.fatalIssues;
   }
 }

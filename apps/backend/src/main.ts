@@ -73,6 +73,14 @@ function checkConfiguration() {
   checker.readEnvFromProcess();
   checker.check();
 
+  if (checker.hasFatalIssues()) {
+    for (const issue of checker.getFatalIssues()) {
+      Logger.error(issue, 'Fatal configuration error');
+    }
+    Logger.error('Fatal configuration errors found. Exiting.');
+    process.exit(1);
+  }
+
   if (checker.hasIssues()) {
     for (const issue of checker.getIssues()) {
       Logger.warn(issue, 'Configuration issue');

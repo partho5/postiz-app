@@ -48,7 +48,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 
 ### Phase 0 — Foundation
 - [x] 0.0 — Map repo + populate Architecture cheat sheet
-- [ ] 0.1 — Add env vars and validation for autopilot module
+- [x] 0.1 — Add env vars and validation for autopilot module
 - [ ] 0.2 — Create empty module directory structure per §Module layout
 - [ ] 0.3 — Skill registry core types (no skills yet)
 - [ ] 0.4 — `tiers.ts` scaffold with one MVP tier (Free)
@@ -497,6 +497,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 
 <!-- entries begin -->
 2026-04-15 | 0.0 | done | coding_guide.md
+2026-04-15 | 0.1 | done | libraries/helpers/src/configuration/configuration.checker.ts, apps/backend/src/main.ts, .env.example
 <!-- entries end -->
 
 ---
