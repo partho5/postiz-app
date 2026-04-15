@@ -43,6 +43,7 @@ model Organization {
   thirdParty        ThirdParty[]
   errors            Errors[]
   apCreditLedger    ApCreditLedger[]
+  apActivityLog     ApActivityLog[]
 }
 
 model Tags {
@@ -106,6 +107,7 @@ model User {
   agencies              SocialMediaAgency[]
   ip                    String?
   agent                 String?
+  apActivityLog         ApActivityLog[]
 
   @@unique([email, providerName])
   @@index([lastReadNotifications])
@@ -753,4 +755,31 @@ enum ApCreditLedgerReason {
   REFUND
   PURCHASE
   EXPIRE
+}
+
+model ApActivityLog {
+  id             String              @id @default(uuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id])
+  userId         String?
+  user           User?               @relation(fields: [userId], references: [id])
+  skillId        String
+  llmModel       String?
+  inputTokens    Int?
+  outputTokens   Int?
+  dollarCost     Decimal?            @db.Decimal(10, 6)
+  creditsCharged Int
+  status         ApActivityLogStatus
+  metadata       Json                @default("{}")
+  createdAt      DateTime            @default(now())
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([skillId, createdAt(sort: Desc)])
+  @@map("ap_activity_log")
+}
+
+enum ApActivityLogStatus {
+  SUCCESS
+  FAILURE
+  PARTIAL
 }
