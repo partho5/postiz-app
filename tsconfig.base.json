@@ -33,7 +33,8 @@
       "@gitroom/react/*": ["libraries/react-shared-libraries/src/*"],
       "@gitroom/plugins/*": ["libraries/plugins/src/*"],
       "@gitroom/workers/*": ["apps/workers/src/*"],
-      "@gitroom/extension/*": ["apps/extension/src/*"]
+      "@gitroom/extension/*": ["apps/extension/src/*"],
+      "@gitroom/autopilot/*": ["libraries/nestjs-libraries/src/autopilot/*"]
     }
   },
   "exclude": ["node_modules", "tmp"]

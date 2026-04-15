@@ -49,7 +49,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 ### Phase 0 — Foundation
 - [x] 0.0 — Map repo + populate Architecture cheat sheet
 - [x] 0.1 — Add env vars and validation for autopilot module
-- [ ] 0.2 — Create empty module directory structure per §Module layout
+- [x] 0.2 — Create empty module directory structure per §Module layout
 - [ ] 0.3 — Skill registry core types (no skills yet)
 - [ ] 0.4 — `tiers.ts` scaffold with one MVP tier (Free)
 - [ ] 0.5 — `skill-costs.ts` scaffold
@@ -202,7 +202,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **`subscriptions` table already exists** in Postiz (model `Subscription`). Our autopilot subscription table must be `@@map("ap_subscriptions")`.
 - **Env validation is non-fatal warnings** by default — `ConfigurationChecker` only logs, does not throw. To make `AP_ENCRYPTION_KEY` fail-fast, add a throw inside `check()` when autopilot module is enabled.
 - **Module pattern**: Most shared backend logic lives in `libraries/nestjs-libraries/src/`, not `apps/backend/src/`. Put autopilot services/repositories in `libraries/nestjs-libraries/src/autopilot/` and expose via an `AutopilotModule` imported in `app.module.ts`.
-- **Root path alias for our new code**: We'll add `@gitroom/autopilot/*` → `libraries/nestjs-libraries/src/autopilot/*` in `tsconfig.base.json` once the directory is created (slice 0.2).
+- **Root path alias for our new code**: `@gitroom/autopilot/*` → `libraries/nestjs-libraries/src/autopilot/*` (added to `tsconfig.base.json` in slice 0.2). Use `@gitroom/autopilot/skills`, `@gitroom/autopilot/agents`, etc. to import from autopilot subdirectories.
 
 ---
 
@@ -498,6 +498,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 <!-- entries begin -->
 2026-04-15 | 0.0 | done | coding_guide.md
 2026-04-15 | 0.1 | done | libraries/helpers/src/configuration/configuration.checker.ts, apps/backend/src/main.ts, .env.example
+2026-04-15 | 0.2 | done | libraries/nestjs-libraries/src/autopilot/ (14 index.ts placeholders), tsconfig.base.json
 <!-- entries end -->
 
 ---
