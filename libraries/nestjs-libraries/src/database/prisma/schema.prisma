@@ -44,6 +44,7 @@ model Organization {
   errors            Errors[]
   apCreditLedger    ApCreditLedger[]
   apActivityLog     ApActivityLog[]
+  apCapabilityGap   ApCapabilityGap[]
 }
 
 model Tags {
@@ -782,4 +783,18 @@ enum ApActivityLogStatus {
   SUCCESS
   FAILURE
   PARTIAL
+}
+
+model ApCapabilityGap {
+  id              String       @id @default(uuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  userMessage     String
+  attemptedSkills String[]
+  reason          String
+  resolved        Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@map("ap_capability_gap")
 }
