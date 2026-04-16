@@ -61,8 +61,8 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.11 — Encryption utility for per-tenant secrets
 - [x] 0.12 — Prisma: `platform_keys` + CRUD service
 - [x] 0.13 — Pre-flight pipeline skeleton (plan gate → credit gate → dispatch)
-- [ ] 0.14 — Activity logger helper + credit debit helper
-- [ ] 0.15 — Capability gap logger helper
+- [x] 0.14 — Activity logger helper + credit debit helper
+- [x] 0.15 — Capability gap logger helper
 - [ ] 0.16 — Vercel AI SDK wiring + provider selection helper
 - [ ] 0.17 — Prisma: `discounts` + `discount_applications` + migration
 - [ ] 0.18 — Discount module (origin-agnostic apply/list/validate)
@@ -511,6 +511,8 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-15 | 0.11 | done | autopilot/encryption/index.ts (AES-256-GCM); index.spec.ts (6 tests pass); libraries/nestjs-libraries/jest.config.js (ts-jest setup)
 2026-04-15 | 0.12 | done | schema.prisma (ApPlatformKey model + Organization back-relation); db push applied; autopilot/platform_keys/index.ts (set/get/del); index.spec.ts (7 tests pass)
 2026-04-15 | 0.13 | done | autopilot/pipeline.ts (PipelineContext/Result types, plan gate, credit gate, skill dispatch, stubs for 0.14/0.15); registerSkillGate() exported; pipeline.spec.ts (9 tests pass)
+2026-04-16 | 0.14 | done | credits/index.ts (getBalance, debitCredits, grantCredits); activity/index.ts (logActivity); pipeline.ts stubs replaced with real helpers + userMessage added to PipelineContext; credits/index.spec.ts (17 tests), activity/index.spec.ts (3 tests), pipeline.spec.ts updated (13 tests)
+2026-04-16 | 0.15 | done | capability_gaps/index.ts (logGap); pipeline.ts wired to logGap on plan_gate + insufficient_credits; capability_gaps/index.spec.ts (3 tests)
 <!-- entries end -->
 
 ---
