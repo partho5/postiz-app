@@ -72,8 +72,8 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 ### Phase 1 — Chat Core
 - [x] 1.1 — Prisma: `business_profile`, `growth_rules` + migration
 - [x] 1.2 — Prisma: `config_change_proposals` + migration
-- [ ] 1.3 — Intent parser agent skeleton (classify + propose, no CRUD)
-- [ ] 1.4 — Proposal → confirm → apply pipeline
+- [x] 1.3 — Intent parser agent skeleton (classify + propose, no CRUD)
+- [x] 1.4 — Proposal → confirm → apply pipeline
 - [ ] 1.5 — Enable `pgvector` extension + `memory_vectors` table + migration
 - [ ] 1.6 — Memory read/write service (structured + vector)
 - [ ] 1.7 — Memorist agent skeleton
@@ -194,6 +194,11 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - Agents: one file per agent, exports `{ name, systemPrompt, skills, run(ctx, input) }`.
 - Never hardcode LLM provider in skill handlers — go through `llm.ts` helper.
 - Never write directly to config tables from a chat handler — always via the confirm pipeline.
+
+### Key files added in Phase 1 (record here so future sessions skip re-derivation)
+- **Intent parser agent**: `libraries/nestjs-libraries/src/autopilot/agents/intent_parser.ts`. Exports `parseIntent(message, llm, tenantCtx?)` + `intentParserAgent: AgentDefinition`. Uses `generateObject` from `ai-v5` with a Zod schema.
+- **Proposal pipeline**: `libraries/nestjs-libraries/src/autopilot/chat/proposals.ts`. Exports `createProposal`, `listPending`, `confirm`, `cancel`, `registerApplier`. Re-exported from `autopilot/chat/index.ts`.
+- **Built-in appliers**: `business_profile` (field-whitelisted upsert) and `growth_rule` (create or update by id) registered at module load. Add new appliers via `registerApplier(entity, fn)` from other modules.
 
 ### Non-obvious gotchas (append as discovered)
 - **No Prisma migrations** — Postiz uses `prisma db push` exclusively. When slice definitions say "migration generated/applied," interpret as: add model to `schema.prisma`, run `pnpm prisma-db-push`, regenerate client with `pnpm prisma-generate`.
@@ -523,6 +528,8 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-16 | 0.20 | done | schema.prisma (ApSubscription + ApInvoice + ApBillingCycle/ApSubscriptionStatus/ApInvoiceStatus enums + Organization back-relations); db push applied; client regenerated; @@map("ap_subscriptions") avoids clash with Postiz Subscription model
 2026-04-16 | 1.1 | done | schema.prisma (ApBusinessProfile + ApGrowthRule + ApUpdatedBy/ApGrowthRuleSource enums + Organization back-relations); db push applied; client regenerated
 2026-04-16 | 1.2 | done | schema.prisma (ApConfigChangeProposal + ApProposalStatus enum + Organization + ApChatMessage back-relations); db push applied; client regenerated
+2026-04-16 | 1.3 | done | autopilot/agents/intent_parser.ts (parseIntent, intentParserAgent); intent_parser.spec.ts (13 tests pass)
+2026-04-16 | 1.4 | done | autopilot/chat/proposals.ts (createProposal, listPending, confirm, cancel, registerApplier; business_profile + growth_rule appliers); proposals.spec.ts (15 tests pass); chat/index.ts re-exports; all 98 autopilot tests green
 <!-- entries end -->
 
 ---
