@@ -74,8 +74,8 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 1.2 — Prisma: `config_change_proposals` + migration
 - [x] 1.3 — Intent parser agent skeleton (classify + propose, no CRUD)
 - [x] 1.4 — Proposal → confirm → apply pipeline
-- [ ] 1.5 — Enable `pgvector` extension + `memory_vectors` table + migration
-- [ ] 1.6 — Memory read/write service (structured + vector)
+- [x] 1.5 — Enable `pgvector` extension + `memory_vectors` table + migration
+- [x] 1.6 — Memory read/write service (structured + vector)
 - [ ] 1.7 — Memorist agent skeleton
 - [ ] 1.8 — Chat ingress endpoint (web source), writes `chat_messages`, routes to intent parser
 - [ ] 1.9 — Frontend: chatbot-primary layout scaffold (no agent wiring yet)
@@ -200,6 +200,10 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **Proposal pipeline**: `libraries/nestjs-libraries/src/autopilot/chat/proposals.ts`. Exports `createProposal`, `listPending`, `confirm`, `cancel`, `registerApplier`. Re-exported from `autopilot/chat/index.ts`.
 - **Built-in appliers**: `business_profile` (field-whitelisted upsert) and `growth_rule` (create or update by id) registered at module load. Add new appliers via `registerApplier(entity, fn)` from other modules.
 
+### Key files added in Phase 1 — slices 1.5–1.6
+- **Memory service**: `autopilot/memory/index.ts`. Exports `getStructuredProfile`, `writeVector`, `queryVector`, `listRecent`, `ensureVectorIndex`. All vector operations use `$queryRaw` / `$executeRaw` because the `embedding` column is `Unsupported("vector(1536)")` in Prisma.
+- **Embedding helper**: `embedText(text)` and `selectEmbeddingModel()` added to `autopilot/llm.ts`. Uses `@ai-sdk/openai` `text-embedding-3-small` (1536 dims). Requires `AP_OPENAI_API_KEY`.
+
 ### Non-obvious gotchas (append as discovered)
 - **No Prisma migrations** — Postiz uses `prisma db push` exclusively. When slice definitions say "migration generated/applied," interpret as: add model to `schema.prisma`, run `pnpm prisma-db-push`, regenerate client with `pnpm prisma-generate`.
 - **No `@@map` anywhere in schema** — Postiz table names in Postgres match the PascalCase model name exactly (Prisma default). Our `ap_` prefix must be set via `@@map("ap_credit_ledger")` etc.
@@ -212,6 +216,10 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **Vercel AI SDK versions**: Repo has `ai` v4.3.19 AND `ai-v5` (ai@5.0.60, pnpm alias). Provider packages (`@ai-sdk/anthropic-v5`, `@ai-sdk/google-v5`, `@ai-sdk/openai`, `@ai-sdk/openai-v5`) all return `LanguageModelV2` and require the v5 runtime. **Always import from `ai-v5`, not `ai`, in autopilot code.** Use `maxOutputTokens` (not `maxTokens`) in ai-v5. Providers importable as: `@ai-sdk/anthropic-v5`, `@ai-sdk/google-v5`, `@ai-sdk/openai`.
 - **PayPal webhook endpoint**: `POST /autopilot/paypal/webhook` — registered as a public (non-authenticated) controller in `ApiModule`. Signature verification calls `POST /v1/notifications/verify-webhook-signature` via OAuth2 client-credentials. `PaypalWebhookService` uses `https://api-m.sandbox.paypal.com` when `NODE_ENV !== 'production'`; live uses `https://api-m.paypal.com`. `AP_PAYPAL_WEBHOOK_ID` required for verification.
 - **Circular relation (ApDiscountApplication ↔ ApInvoice)**: Two named Prisma relations between these models — `"DiscountAppToInvoice"` (FK on `ApDiscountApplication.invoiceId`) and `"InvoiceToDiscountApp"` (FK on `ApInvoice.discountApplicationId`, `@unique`). Both FKs are optional. This is valid in Prisma but requires naming both sides to avoid ambiguity.
+- **pgvector extension requires superuser**: `CREATE EXTENSION vector;` must be run as the `postgres` superuser before `pnpm prisma-db-push`. The `postiz-local` app user lacks `SUPERUSER`. On this machine the postgres password is known from bash history. In CI/production, add it to the DB init script.
+- **pgvector and Prisma `Unsupported` type**: Prisma cannot serialize/deserialize the `vector` type. All reads/writes on `ApMemoryVector.embedding` must use `$queryRaw` / `$executeRaw`. Do not try to use Prisma ORM findMany/create on the embedding column directly.
+- **Embedding model**: Only `AP_OPENAI_API_KEY` enables embeddings (`text-embedding-3-small`, 1536 dims). Anthropic and Google have no embedding model in the current SDK wiring. If the key is absent, `embedText()` throws immediately.
+- **IVFFLAT index**: Created via raw SQL (superuser) outside of Prisma — Prisma cannot manage indexes on `Unsupported` columns. `ensureVectorIndex(db)` in the memory service calls `CREATE INDEX IF NOT EXISTS` but requires the calling DB user to have index creation rights (app user has this). The `WITH (lists = 100)` value is suitable for up to ~1M rows; reconfigure when scaling.
 
 ---
 
@@ -530,6 +538,8 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-16 | 1.2 | done | schema.prisma (ApConfigChangeProposal + ApProposalStatus enum + Organization + ApChatMessage back-relations); db push applied; client regenerated
 2026-04-16 | 1.3 | done | autopilot/agents/intent_parser.ts (parseIntent, intentParserAgent); intent_parser.spec.ts (13 tests pass)
 2026-04-16 | 1.4 | done | autopilot/chat/proposals.ts (createProposal, listPending, confirm, cancel, registerApplier; business_profile + growth_rule appliers); proposals.spec.ts (15 tests pass); chat/index.ts re-exports; all 98 autopilot tests green
+2026-04-16 | 1.5 | done | schema.prisma (previewFeatures=postgresqlExtensions; extensions=pgvector; ApMemoryVectorKind enum; ApMemoryVector model + Organization back-relation; Unsupported("vector(1536)") embedding); db push applied; IVFFLAT index created manually via postgres superuser; client regenerated
+2026-04-16 | 1.6 | done | llm.ts (selectEmbeddingModel, embedText using @ai-sdk/openai text-embedding-3-small); autopilot/memory/index.ts (getStructuredProfile, writeVector, queryVector via $queryRaw cosine-ops, listRecent, ensureVectorIndex); memory/index.spec.ts (8 tests pass); all 106 autopilot tests green
 <!-- entries end -->
 
 ---

@@ -15,7 +15,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic-v5';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google-v5';
-import { generateText, type LanguageModel } from 'ai-v5';
+import { generateText, embed, type LanguageModel, type EmbeddingModel } from 'ai-v5';
 import type { LlmProvider, LlmCompleteOptions } from './skills/types';
 
 // ---------------------------------------------------------------------------
@@ -137,4 +137,37 @@ function buildModel(
     case 'google':
       return createGoogleGenerativeAI({ apiKey })(modelId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Embedding support
+// ---------------------------------------------------------------------------
+
+/**
+ * Default embedding model.  Uses OpenAI text-embedding-3-small (1536 dims)
+ * when AP_OPENAI_API_KEY is set; falls back to OpenAI ada-002 for compat.
+ * Returns null when no OpenAI key is present.
+ *
+ * Only OpenAI is supported for embeddings — Anthropic and Google do not
+ * expose embedding endpoints through the Vercel AI SDK at this time.
+ */
+export function selectEmbeddingModel(): EmbeddingModel<string> | null {
+  const apiKey = process.env.AP_OPENAI_API_KEY;
+  if (!apiKey) return null;
+  return createOpenAI({ apiKey }).textEmbedding('text-embedding-3-small');
+}
+
+/**
+ * Embed a single text string using the default embedding model.
+ * Returns a number[] of length 1536, or throws if no model is available.
+ */
+export async function embedText(text: string): Promise<number[]> {
+  const model = selectEmbeddingModel();
+  if (!model) {
+    throw new Error(
+      'No embedding model available — set AP_OPENAI_API_KEY to enable vector memory.',
+    );
+  }
+  const result = await embed({ model, value: text });
+  return result.embedding as number[];
 }

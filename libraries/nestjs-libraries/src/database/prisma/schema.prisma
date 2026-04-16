@@ -2,13 +2,15 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
-  runtime  = "nodejs"
+  provider        = "prisma-client-js"
+  runtime         = "nodejs"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
 }
 
 model Organization {
@@ -53,6 +55,7 @@ model Organization {
   apBusinessProfile       ApBusinessProfile?
   apGrowthRule            ApGrowthRule[]
   apConfigChangeProposal  ApConfigChangeProposal[]
+  apMemoryVector          ApMemoryVector[]
 }
 
 model Tags {
@@ -1024,4 +1027,32 @@ model ApConfigChangeProposal {
 
   @@index([organizationId, status])
   @@map("ap_config_change_proposal")
+}
+
+// ─── Slice 1.5: Memory vectors (pgvector) ────────────────────────────────────
+
+enum ApMemoryVectorKind {
+  ANECDOTE
+  MILESTONE
+  BRAND_RULE
+  LEARNING
+  COMPETITOR
+  PERSONAL_STORY
+}
+
+model ApMemoryVector {
+  id               String               @id @default(uuid())
+  organizationId   String
+  organization     Organization         @relation(fields: [organizationId], references: [id])
+  kind             ApMemoryVectorKind
+  content          String
+  /// pgvector embedding — dimension fixed at 1536 (text-embedding-3-small).
+  /// Queried via $queryRaw; not filterable through Prisma ORM directly.
+  embedding        Unsupported("vector(1536)")
+  sourceRef        Json?
+  freshnessTtlDays Int?
+  createdAt        DateTime             @default(now())
+
+  @@index([organizationId, kind, createdAt(sort: Desc)])
+  @@map("ap_memory_vector")
 }
