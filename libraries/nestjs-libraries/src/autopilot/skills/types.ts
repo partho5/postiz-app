@@ -1,4 +1,5 @@
 import { Organization, PrismaClient, User } from '@prisma/client';
+import type { LanguageModel } from 'ai-v5';
 
 // ---------------------------------------------------------------------------
 // SkillId
@@ -22,12 +23,26 @@ export interface SkillLogger {
   debug(message: string, ...meta: unknown[]): void;
 }
 
+/** Options accepted by the convenience complete() method. */
+export interface LlmCompleteOptions {
+  system?: string;
+  /** Maximum tokens to generate (maps to ai-v5 maxOutputTokens). */
+  maxOutputTokens?: number;
+  temperature?: number;
+}
+
 /**
- * Placeholder for the LLM provider abstraction.
- * Replaced by the real union type when llm.ts is implemented (slice 0.16).
+ * Thin LLM provider abstraction backed by the Vercel AI SDK.
+ * Implemented in autopilot/llm.ts (slice 0.16).
+ *
+ * - `model`    — raw Vercel AI SDK LanguageModel; use directly for streaming or tool-calling.
+ * - `complete` — convenience wrapper: single-turn text completion, no streaming.
  */
 export interface LlmProvider {
-  complete(prompt: string, opts?: Record<string, unknown>): Promise<string>;
+  /** The underlying Vercel AI SDK model handle. */
+  model: LanguageModel;
+  /** Simple single-turn text completion (no streaming, no tools). */
+  complete(prompt: string, opts?: LlmCompleteOptions): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------

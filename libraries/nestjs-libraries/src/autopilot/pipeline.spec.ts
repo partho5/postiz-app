@@ -40,7 +40,7 @@ function makeMockDb(balance: number) {
 const TENANT = { id: 'org-1' } as any;
 const USER = { id: 'user-1' } as any;
 const LOGGER = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
-const LLM = { complete: jest.fn() };
+const LLM = { model: {} as any, complete: jest.fn() };
 
 function makeCtx(balance: number, tierId = 'free', userMessage = ''): PipelineContext {
   return { tenant: TENANT, user: USER, db: makeMockDb(balance), llm: LLM, logger: LOGGER, tierId, userMessage };
