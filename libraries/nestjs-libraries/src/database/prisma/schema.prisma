@@ -50,6 +50,9 @@ model Organization {
   apDiscountApplication   ApDiscountApplication[]
   apSubscription          ApSubscription[]
   apInvoice               ApInvoice[]
+  apBusinessProfile       ApBusinessProfile?
+  apGrowthRule            ApGrowthRule[]
+  apConfigChangeProposal  ApConfigChangeProposal[]
 }
 
 model Tags {
@@ -813,6 +816,7 @@ model ApChatMessage {
   source         ApChatMessageSource
   metadata       Json                 @default("{}")
   createdAt      DateTime             @default(now())
+  proposals      ApConfigChangeProposal[]
 
   @@index([organizationId, createdAt])
   @@map("ap_chat_message")
@@ -948,4 +952,76 @@ model ApInvoice {
 
   @@index([organizationId])
   @@map("ap_invoice")
+}
+
+// ─── Slice 1.1: Business Profile + Growth Rules ──────────────────────────────
+
+enum ApUpdatedBy {
+  AI
+  USER
+}
+
+model ApBusinessProfile {
+  id               String       @id @default(uuid())
+  organizationId   String       @unique
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  niche            String
+  goals            Json         @default("[]")
+  brandVoiceShort  String
+  brandVoiceExtended String
+  antiPatterns     Json         @default("[]")
+  regulatoryFlags  Json         @default("[]")
+  updatedAt        DateTime     @updatedAt
+  updatedBy        ApUpdatedBy  @default(AI)
+
+  @@map("ap_business_profile")
+}
+
+enum ApGrowthRuleSource {
+  AI
+  USER
+  DEFAULT
+}
+
+model ApGrowthRule {
+  id             String             @id @default(uuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  ruleKey        String
+  ruleValue      Json
+  active         Boolean            @default(true)
+  source         ApGrowthRuleSource @default(DEFAULT)
+  updatedAt      DateTime           @updatedAt
+
+  @@index([organizationId])
+  @@map("ap_growth_rule")
+}
+
+// ─── Slice 1.2: Config Change Proposals ─────────────────────────────────────
+
+enum ApProposalStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  APPLIED
+}
+
+model ApConfigChangeProposal {
+  id              String           @id @default(uuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  originMessageId String?
+  originMessage   ApChatMessage?   @relation(fields: [originMessageId], references: [id])
+  targetEntity    String
+  targetId        String?
+  changes         Json
+  rationale       String
+  expiresAt       DateTime
+  status          ApProposalStatus @default(PENDING)
+  createdAt       DateTime         @default(now())
+  decidedAt       DateTime?
+
+  @@index([organizationId, status])
+  @@map("ap_config_change_proposal")
 }

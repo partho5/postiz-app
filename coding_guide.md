@@ -70,8 +70,8 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.20 — Prisma: `subscriptions` + `invoices` + migration
 
 ### Phase 1 — Chat Core
-- [ ] 1.1 — Prisma: `business_profile`, `growth_rules` + migration
-- [ ] 1.2 — Prisma: `config_change_proposals` + migration
+- [x] 1.1 — Prisma: `business_profile`, `growth_rules` + migration
+- [x] 1.2 — Prisma: `config_change_proposals` + migration
 - [ ] 1.3 — Intent parser agent skeleton (classify + propose, no CRUD)
 - [ ] 1.4 — Proposal → confirm → apply pipeline
 - [ ] 1.5 — Enable `pgvector` extension + `memory_vectors` table + migration
@@ -521,6 +521,8 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-16 | 0.18 | done | autopilot/discount/index.ts (resolveDiscount, applyDiscount, listActive); discount/index.spec.ts (14 tests pass); all 70 autopilot tests green
 2026-04-16 | 0.19 | done | autopilot/webhooks/paypal.ts (PaypalWebhookService: verifySignature via PayPal API, handleEvent no-op switch); apps/backend/src/api/routes/paypal-webhook.controller.ts; api.module.ts updated (public route, not authenticated)
 2026-04-16 | 0.20 | done | schema.prisma (ApSubscription + ApInvoice + ApBillingCycle/ApSubscriptionStatus/ApInvoiceStatus enums + Organization back-relations); db push applied; client regenerated; @@map("ap_subscriptions") avoids clash with Postiz Subscription model
+2026-04-16 | 1.1 | done | schema.prisma (ApBusinessProfile + ApGrowthRule + ApUpdatedBy/ApGrowthRuleSource enums + Organization back-relations); db push applied; client regenerated
+2026-04-16 | 1.2 | done | schema.prisma (ApConfigChangeProposal + ApProposalStatus enum + Organization + ApChatMessage back-relations); db push applied; client regenerated
 <!-- entries end -->
 
 ---
