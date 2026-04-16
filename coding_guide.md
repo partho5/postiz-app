@@ -64,10 +64,10 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 0.14 — Activity logger helper + credit debit helper
 - [x] 0.15 — Capability gap logger helper
 - [x] 0.16 — Vercel AI SDK wiring + provider selection helper
-- [ ] 0.17 — Prisma: `discounts` + `discount_applications` + migration
-- [ ] 0.18 — Discount module (origin-agnostic apply/list/validate)
-- [ ] 0.19 — PayPal webhook endpoint scaffolding (signature verify, no-op handlers)
-- [ ] 0.20 — Prisma: `subscriptions` + `invoices` + migration
+- [x] 0.17 — Prisma: `discounts` + `discount_applications` + migration
+- [x] 0.18 — Discount module (origin-agnostic apply/list/validate)
+- [x] 0.19 — PayPal webhook endpoint scaffolding (signature verify, no-op handlers)
+- [x] 0.20 — Prisma: `subscriptions` + `invoices` + migration
 
 ### Phase 1 — Chat Core
 - [ ] 1.1 — Prisma: `business_profile`, `growth_rules` + migration
@@ -205,6 +205,8 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **Root path alias for our new code**: `@gitroom/autopilot/*` → `libraries/nestjs-libraries/src/autopilot/*` (added to `tsconfig.base.json` in slice 0.2). Use `@gitroom/autopilot/skills`, `@gitroom/autopilot/agents`, etc. to import from autopilot subdirectories.
 - **Running autopilot unit tests**: `node_modules/.bin/jest --config=libraries/nestjs-libraries/jest.config.js --testPathPattern=<pattern>`. Config created in slice 0.11 (ts-jest 29, no NX dependency). `@nx/jest` is NOT installed — do not reference it.
 - **Vercel AI SDK versions**: Repo has `ai` v4.3.19 AND `ai-v5` (ai@5.0.60, pnpm alias). Provider packages (`@ai-sdk/anthropic-v5`, `@ai-sdk/google-v5`, `@ai-sdk/openai`, `@ai-sdk/openai-v5`) all return `LanguageModelV2` and require the v5 runtime. **Always import from `ai-v5`, not `ai`, in autopilot code.** Use `maxOutputTokens` (not `maxTokens`) in ai-v5. Providers importable as: `@ai-sdk/anthropic-v5`, `@ai-sdk/google-v5`, `@ai-sdk/openai`.
+- **PayPal webhook endpoint**: `POST /autopilot/paypal/webhook` — registered as a public (non-authenticated) controller in `ApiModule`. Signature verification calls `POST /v1/notifications/verify-webhook-signature` via OAuth2 client-credentials. `PaypalWebhookService` uses `https://api-m.sandbox.paypal.com` when `NODE_ENV !== 'production'`; live uses `https://api-m.paypal.com`. `AP_PAYPAL_WEBHOOK_ID` required for verification.
+- **Circular relation (ApDiscountApplication ↔ ApInvoice)**: Two named Prisma relations between these models — `"DiscountAppToInvoice"` (FK on `ApDiscountApplication.invoiceId`) and `"InvoiceToDiscountApp"` (FK on `ApInvoice.discountApplicationId`, `@unique`). Both FKs are optional. This is valid in Prisma but requires naming both sides to avoid ambiguity.
 
 ---
 
@@ -515,6 +517,10 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-16 | 0.14 | done | credits/index.ts (getBalance, debitCredits, grantCredits); activity/index.ts (logActivity); pipeline.ts stubs replaced with real helpers + userMessage added to PipelineContext; credits/index.spec.ts (17 tests), activity/index.spec.ts (3 tests), pipeline.spec.ts updated (13 tests)
 2026-04-16 | 0.15 | done | capability_gaps/index.ts (logGap); pipeline.ts wired to logGap on plan_gate + insufficient_credits; capability_gaps/index.spec.ts (3 tests)
 2026-04-16 | 0.16 | done | autopilot/llm.ts (selectModel, createLlmProvider, DEFAULT_MODEL_PREFERENCE); skills/types.ts (LlmProvider updated to real LanguageModel from ai-v5, LlmCompleteOptions); llm.spec.ts (6 tests pass); pipeline.spec.ts mock updated; all 56 autopilot tests green
+2026-04-16 | 0.17 | done | schema.prisma (ApDiscount, ApDiscountApplication + ApDiscountAmountType enum + Organization back-relations); db push applied; client regenerated
+2026-04-16 | 0.18 | done | autopilot/discount/index.ts (resolveDiscount, applyDiscount, listActive); discount/index.spec.ts (14 tests pass); all 70 autopilot tests green
+2026-04-16 | 0.19 | done | autopilot/webhooks/paypal.ts (PaypalWebhookService: verifySignature via PayPal API, handleEvent no-op switch); apps/backend/src/api/routes/paypal-webhook.controller.ts; api.module.ts updated (public route, not authenticated)
+2026-04-16 | 0.20 | done | schema.prisma (ApSubscription + ApInvoice + ApBillingCycle/ApSubscriptionStatus/ApInvoiceStatus enums + Organization back-relations); db push applied; client regenerated; @@map("ap_subscriptions") avoids clash with Postiz Subscription model
 <!-- entries end -->
 
 ---

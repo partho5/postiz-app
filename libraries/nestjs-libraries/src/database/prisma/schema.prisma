@@ -42,11 +42,14 @@ model Organization {
   sets              Sets[]
   thirdParty        ThirdParty[]
   errors            Errors[]
-  apCreditLedger    ApCreditLedger[]
-  apActivityLog     ApActivityLog[]
-  apCapabilityGap   ApCapabilityGap[]
-  apChatMessage     ApChatMessage[]
-  apPlatformKey     ApPlatformKey[]
+  apCreditLedger          ApCreditLedger[]
+  apActivityLog           ApActivityLog[]
+  apCapabilityGap         ApCapabilityGap[]
+  apChatMessage           ApChatMessage[]
+  apPlatformKey           ApPlatformKey[]
+  apDiscountApplication   ApDiscountApplication[]
+  apSubscription          ApSubscription[]
+  apInvoice               ApInvoice[]
 }
 
 model Tags {
@@ -841,4 +844,108 @@ model ApPlatformKey {
   @@unique([organizationId, platform])
   @@index([organizationId])
   @@map("ap_platform_key")
+}
+
+// ─── Slice 0.17: Discounts ────────────────────────────────────────────────────
+
+enum ApDiscountAmountType {
+  PERCENT
+  FLAT
+}
+
+model ApDiscount {
+  id           String                  @id @default(uuid())
+  code         String?                 @unique
+  amountType   ApDiscountAmountType
+  amount       Int
+  applicableTo Json                    @default("{}")
+  validFrom    DateTime
+  validTo      DateTime
+  maxUses      Int?
+  usesCount    Int                     @default(0)
+  active       Boolean                 @default(true)
+  originNote   String
+  createdAt    DateTime                @default(now())
+  applications ApDiscountApplication[]
+
+  @@index([active])
+  @@map("ap_discount")
+}
+
+model ApDiscountApplication {
+  id             String       @id @default(uuid())
+  discountId     String
+  discount       ApDiscount   @relation(fields: [discountId], references: [id])
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  // FK: which invoice this application was recorded against (optional)
+  invoiceId      String?
+  invoice        ApInvoice?   @relation("DiscountAppToInvoice", fields: [invoiceId], references: [id])
+  // back-ref: the invoice that declares this as its canonical discount application
+  invoiceRef     ApInvoice?   @relation("InvoiceToDiscountApp")
+  appliedAt      DateTime     @default(now())
+  amountApplied  Int
+
+  @@index([organizationId])
+  @@index([discountId])
+  @@map("ap_discount_application")
+}
+
+// ─── Slice 0.20: Subscriptions + Invoices ────────────────────────────────────
+
+enum ApBillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum ApSubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  PAUSED
+}
+
+model ApSubscription {
+  id                   String               @id @default(uuid())
+  organizationId       String
+  organization         Organization         @relation(fields: [organizationId], references: [id])
+  tierId               String
+  billingCycle         ApBillingCycle
+  paypalSubscriptionId String?
+  status               ApSubscriptionStatus
+  currentPeriodEnd     DateTime
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  invoices             ApInvoice[]
+
+  @@index([organizationId])
+  @@map("ap_subscriptions")
+}
+
+enum ApInvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model ApInvoice {
+  id                    String                 @id @default(uuid())
+  organizationId        String
+  organization          Organization           @relation(fields: [organizationId], references: [id])
+  subscriptionId        String?
+  subscription          ApSubscription?        @relation(fields: [subscriptionId], references: [id])
+  amountCents           Int
+  // FK: the canonical discount application on this invoice (one-to-one, optional)
+  discountApplicationId String?                @unique
+  discountApplication   ApDiscountApplication? @relation("InvoiceToDiscountApp", fields: [discountApplicationId], references: [id])
+  // back-ref: all discount applications that recorded this invoice in their invoiceId FK
+  applications          ApDiscountApplication[] @relation("DiscountAppToInvoice")
+  paypalInvoiceId       String?
+  status                ApInvoiceStatus
+  issuedAt              DateTime               @default(now())
+  paidAt                DateTime?
+
+  @@index([organizationId])
+  @@map("ap_invoice")
 }

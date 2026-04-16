@@ -34,6 +34,8 @@ import { AutopostController } from '@gitroom/backend/api/routes/autopost.control
 import { SetsController } from '@gitroom/backend/api/routes/sets.controller';
 import { ThirdPartyController } from '@gitroom/backend/api/routes/third-party.controller';
 import { MonitorController } from '@gitroom/backend/api/routes/monitor.controller';
+import { PaypalWebhookController } from '@gitroom/backend/api/routes/paypal-webhook.controller';
+import { PaypalWebhookService } from '@gitroom/autopilot/webhooks/paypal';
 
 const authenticatedController = [
   UsersController,
@@ -62,11 +64,13 @@ const authenticatedController = [
     AuthController,
     PublicController,
     MonitorController,
+    PaypalWebhookController,
     ...authenticatedController,
   ],
   providers: [
     AuthService,
     StripeService,
+    PaypalWebhookService,
     OpenaiService,
     ExtractContentService,
     AuthMiddleware,
