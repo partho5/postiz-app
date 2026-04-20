@@ -36,6 +36,9 @@ import { ThirdPartyController } from '@gitroom/backend/api/routes/third-party.co
 import { MonitorController } from '@gitroom/backend/api/routes/monitor.controller';
 import { PaypalWebhookController } from '@gitroom/backend/api/routes/paypal-webhook.controller';
 import { PaypalWebhookService } from '@gitroom/autopilot/webhooks/paypal';
+import { AutopilotChatController } from '@gitroom/backend/api/routes/autopilot-chat.controller';
+import { AutopilotChatService } from '@gitroom/autopilot/chat/chat.service';
+import { CadenceConfigService } from '@gitroom/autopilot/stack/cadence-config.service';
 
 const authenticatedController = [
   UsersController,
@@ -55,6 +58,7 @@ const authenticatedController = [
   AutopostController,
   SetsController,
   ThirdPartyController,
+  AutopilotChatController,
 ];
 @Module({
   imports: [UploadModule],
@@ -71,6 +75,8 @@ const authenticatedController = [
     AuthService,
     StripeService,
     PaypalWebhookService,
+    AutopilotChatService,
+    CadenceConfigService,
     OpenaiService,
     ExtractContentService,
     AuthMiddleware,

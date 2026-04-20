@@ -56,6 +56,10 @@ model Organization {
   apGrowthRule            ApGrowthRule[]
   apConfigChangeProposal  ApConfigChangeProposal[]
   apMemoryVector          ApMemoryVector[]
+  apPostCandidate         ApPostCandidate[]
+  apCadenceConfig         ApCadenceConfig[]
+  apScheduledSlot         ApScheduledSlot[]
+  apPublishedPost         ApPublishedPost[]
 }
 
 model Tags {
@@ -1055,4 +1059,116 @@ model ApMemoryVector {
 
   @@index([organizationId, kind, createdAt(sort: Desc)])
   @@map("ap_memory_vector")
+}
+
+// ─── Slice 2.1: Post Candidates (stack) ──────────────────────────────────────
+
+enum ApPostCandidateStatus {
+  PENDING
+  RESERVED
+  PUBLISHED
+  EXPIRED
+  FAILED
+}
+
+model ApPostCandidate {
+  id              String                @id @default(uuid())
+  organizationId  String
+  organization    Organization          @relation(fields: [organizationId], references: [id])
+  platform        String
+  content         String
+  contentVariants Json                  @default("{}")
+  mediaUrls       Json                  @default("[]")
+  status          ApPostCandidateStatus @default(PENDING)
+  priority        Int                   @default(0)
+  source          String                @default("unknown")
+  expiresAt       DateTime?
+  metadata        Json                  @default("{}")
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  apScheduledSlot ApScheduledSlot[]
+  apPublishedPost ApPublishedPost[]
+
+  @@index([organizationId, platform, status, priority(sort: Desc), createdAt])
+  @@index([organizationId, status, expiresAt])
+  @@map("ap_post_candidate")
+}
+
+// ─── Slice 2.3: Cadence Config ────────────────────────────────────────────────
+
+enum ApCadenceConfigSource {
+  AI
+  USER
+  DEFAULT
+}
+
+model ApCadenceConfig {
+  id             String                @id @default(uuid())
+  organizationId String
+  organization   Organization          @relation(fields: [organizationId], references: [id])
+  platform       String
+  postsPerDay    Int                   @default(1)
+  preferredTimes Json                  @default("[]")
+  timezone       String                @default("UTC")
+  pausedUntil    DateTime?
+  active         Boolean               @default(true)
+  source         ApCadenceConfigSource @default(DEFAULT)
+  version        Int                   @default(1)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([organizationId, platform])
+  @@map("ap_cadence_config")
+}
+
+// ─── Slice 2.4: Scheduled Slots ───────────────────────────────────────────────
+
+enum ApScheduledSlotStatus {
+  PENDING
+  TRIGGERED
+  SKIPPED
+  CANCELLED
+}
+
+model ApScheduledSlot {
+  id               String                @id @default(uuid())
+  organizationId   String
+  organization     Organization          @relation(fields: [organizationId], references: [id])
+  platform         String
+  scheduledAt      DateTime
+  status           ApScheduledSlotStatus @default(PENDING)
+  postCandidateId  String?
+  postCandidate    ApPostCandidate?      @relation(fields: [postCandidateId], references: [id])
+  metadata         Json                  @default("{}")
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@index([organizationId, platform, scheduledAt, status])
+  @@index([scheduledAt, status])
+  @@map("ap_scheduled_slot")
+
+  apPublishedPost ApPublishedPost?
+}
+
+// ─── Slice 2.7: Published Posts ───────────────────────────────────────────────
+
+model ApPublishedPost {
+  id              String           @id @default(uuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  platform        String
+  postCandidateId String
+  postCandidate   ApPostCandidate  @relation(fields: [postCandidateId], references: [id])
+  scheduledSlotId String?          @unique
+  scheduledSlot   ApScheduledSlot? @relation(fields: [scheduledSlotId], references: [id])
+  postizPostId    String
+  publishedAt     DateTime         @default(now())
+  releaseUrl      String?
+  metadata        Json             @default("{}")
+  createdAt       DateTime         @default(now())
+
+  @@index([organizationId, publishedAt])
+  @@index([postCandidateId])
+  @@map("ap_published_post")
 }

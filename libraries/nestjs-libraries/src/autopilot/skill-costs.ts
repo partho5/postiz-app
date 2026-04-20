@@ -12,9 +12,11 @@ import type { SkillId } from '@gitroom/autopilot/skills';
  * unknown skills fall through to the 0-default in getSkillCost().
  */
 const SKILL_COSTS: Partial<Record<SkillId, number>> = {
-  // skills added here as they are implemented, e.g.:
-  // push_to_stack: 1,
-  // generate_copy: 5,
+  rewrite_for_platform: 3,
+  research_topic: 2,
+  research_competitor: 5,
+  analytics_snapshot: 1,
+  rollback_post: 2,
 };
 
 /**

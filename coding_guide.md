@@ -98,18 +98,18 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 2.9 — Stale candidate sweeper cron
 - [x] 2.10 — Stack depth enforcement (minimum N, never empty)
 - [x] 2.11 — Evergreen fallback pool seed + retrieval
-- [ ] 2.12 — Pause/resume: `cadence_config.paused_until` + slot scheduler respect
+- [x] 2.12 — Pause/resume: `cadence_config.paused_until` + slot scheduler respect
 
 ### Phase 3 — Generation sub-agents
-- [ ] 3.1 — Copywriter agent (draft generation, voice-aware)
-- [ ] 3.2 — Fan-out agent (intent → per-platform drafts → stacks)
-- [ ] 3.3 — Platform rewrite skill (draft → platform-tuned variant)
-- [ ] 3.4 — Researcher agent (Tavily integration)
-- [ ] 3.5 — Researcher agent (Apify basic)
+- [x] 3.1 — Copywriter agent (draft generation, voice-aware)
+- [x] 3.2 — Fan-out agent (intent → per-platform drafts → stacks)
+- [x] 3.3 — Platform rewrite skill (draft → platform-tuned variant)
+- [x] 3.4 — Researcher agent (Tavily integration)
+- [x] 3.5 — Researcher agent (Apify basic)
 
 ### Phase 4 — Learning loop
-- [ ] 4.1 — Analytics snapshot skill (per platform, reuse Postiz where possible)
-- [ ] 4.2 — Rollback skill (delete from platform + mark row)
+- [x] 4.1 — Analytics snapshot skill (per platform, reuse Postiz where possible)
+- [x] 4.2 — Rollback skill (delete from platform + mark row)
 - [ ] 4.3 — Prisma: `strategy_patterns` + `tenant_strategy_optout` + migration
 - [ ] 4.4 — Analyzer agent (performance → tenant memory)
 - [ ] 4.5 — Analyzer: anonymized strategy pattern extraction
@@ -230,6 +230,15 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **Chat service onboarding routing**: `chat.service.ts` now detects first-run (no `ApBusinessProfile` row for the tenant). When `isFirstRun`, loads conversation history via `_loadOnboardingHistory()` and routes through `analyzeOnboarding()` instead of the intent parser. The onboarding flow uses `streamText` with `messages` (full conversation context) for follow-up questions, and the existing `createProposal` → confirm → apply pipeline for the final profile proposal.
 - **Starter prompts updated**: First chip is now "Help me set up my business profile" (triggers onboarding for new tenants).
 
+### Key files added in Phase 2 — slice 2.12
+- **CadenceConfigService**: `autopilot/stack/cadence-config.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService)`. Methods:
+  - `pause(tenantId, platform, until: Date): Promise<ApCadenceConfig>` — upserts config, sets `pausedUntil=until`, `source=USER`, increments `version`.
+  - `resume(tenantId, platform): Promise<ApCadenceConfig>` — upserts config, clears `pausedUntil=null`, `source=USER`, increments `version`.
+  - `get(tenantId, platform): Promise<ApCadenceConfig | null>` — reads config by compound key.
+  - `isPaused(tenantId, platform): Promise<boolean>` — returns true only when `pausedUntil` is non-null and in the future.
+- **`applyCadenceConfig` applier**: standalone exported function registered via `registerApplier('cadence_config', ...)` at module load. Whitelisted fields: `pausedUntil` (ISO string or null), `postsPerDay`, `timezone`, `preferredTimes`, `active`. `targetId` = platform name. Sets `source=AI`, increments `version`.
+- **Slot scheduler + depth enforcer**: already respecting `pausedUntil` since slices 2.5 and 2.10. No changes needed.
+
 ### Key files added in Phase 2 — slice 2.11
 - **EvergreenPoolService**: `autopilot/stack/evergreen-pool.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService)`. Methods:
   - `seedEvergreen(tenantId, platform, content, options?: SeedEvergreenOptions): Promise<ApPostCandidate>` — creates evergreen candidate (`source='evergreen'`, `expiresAt=null`, `priority=-1`).
@@ -272,6 +281,61 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
   - `popTop(db: PrismaClient, tenantId: string, platform: string): Promise<ApPostCandidate | null>` — uses `SELECT … FOR UPDATE SKIP LOCKED` via `$queryRaw` + `$transaction`; returns a RESERVED row.
   - `expire(db: PrismaClient, tenantId?: string): Promise<number>` — marks stale PENDING rows EXPIRED; omit tenantId for global sweep.
   - `depth(db: PrismaClient, tenantId: string, platform?: string): Promise<number>` — count of PENDING non-expired candidates.
+
+### Key files added in Phase 3 — slice 3.1
+- **Copywriter agent**: `autopilot/agents/copywriter.ts`. Exports:
+  - `runCopywriter(ctx: AgentContext, input: CopywriterInput): Promise<CopywriterOutput>` — loads profile + memory, builds voice-aware system prompt, calls `generateObject` to produce structured drafts.
+  - `copywriterAgent: AgentDefinition<CopywriterInput, CopywriterOutput>` — id: `'copywriter'`.
+  - `CopywriterInput { platform: string, topic: string, count?: number, guidelines?: string }`.
+  - `CopywriterOutput { drafts: CopywriterDraft[] }`.
+  - `CopywriterDraft { content: string, hookType?: string, cta?: string, hashtags?: string[], characterCount: number }`.
+  - Platform specs: `PLATFORM_SPECS` record keyed by lowercase platform name (`twitter`, `linkedin`, `instagram`, `facebook`, `threads`, `tiktok`, `youtube`). Each has `displayName`, `maxChars`, `conventions`. Unknown platforms get a generic fallback.
+  - Voice injection: reads `getStructuredProfile()` for brand voice, niche, goals, anti-patterns, growth rules. Queries `queryVector()` with the topic (top 5, kinds: BRAND_RULE, ANECDOTE, LEARNING, PERSONAL_STORY, MILESTONE). Both gracefully degrade when unavailable.
+
+### Key files added in Phase 3 — slice 3.2
+- **Fan-out agent**: `autopilot/agents/fan_out.ts`. Exports:
+  - `runFanOut(ctx: AgentContext, input: FanOutInput): Promise<FanOutOutput>` — resolves target platforms, calls `runCopywriter` per platform, pushes drafts to stacks.
+  - `fanOutAgent: AgentDefinition<FanOutInput, FanOutOutput>` — id: `'fan_out'`.
+  - `FanOutInput { topic: string, platforms?: string[], guidelines?: string, countPerPlatform?: number, priority?: number }`.
+  - `FanOutOutput { results: FanOutPlatformResult[], skipped: Array<{ platform: string, reason: string }> }`.
+  - `FanOutPlatformResult { platform: string, pushed: number, candidateIds: string[] }`.
+  - Default priority: `10` (higher than stock-keeper fills at 0). Source: `'fan_out_agent'`.
+  - Platform resolution: when `platforms` omitted, queries `apCadenceConfig.findMany({ active: true, non-paused })` — same pattern as DepthEnforcerService.
+
+### Key files added in Phase 3 — slice 3.3
+- **Platform rewrite skill**: `autopilot/skills/rewrite_for_platform.ts`. Exports:
+  - `handleRewrite(ctx: SkillContext, input: RewriteInput): Promise<RewriteOutput>` — loads profile for voice, resolves source/target platform specs, calls `generateObject` with Zod schema.
+  - `buildRewritePrompt(sourceSpec, targetSpec, profile, guidelines?): string` — pure function for testing.
+  - `rewriteForPlatformSkill: SkillEntry<RewriteInput, RewriteOutput>` — id: `'rewrite_for_platform'`. Registered in `SKILL_REGISTRY`.
+  - `RewriteInput { draft: string, sourcePlatform?: string, targetPlatform: string, guidelines?: string }`.
+  - `RewriteOutput { content, hookType?, cta?, hashtags?, characterCount, originalDraft, platform }`.
+- **Copywriter exports added**: `PLATFORM_SPECS`, `DEFAULT_PLATFORM_SPEC`, `PlatformSpec` now exported from `autopilot/agents/copywriter.ts` (were private before 3.3).
+- **SKILL_REGISTRY**: first entry registered — `rewrite_for_platform` in `autopilot/skills/index.ts`.
+
+### Key files added in Phase 4 — slices 4.1–4.2
+- **Analytics snapshot skill**: `autopilot/skills/analytics_snapshot.ts`. Exports:
+  - `handleAnalyticsSnapshot(ctx: SkillContext, input: AnalyticsSnapshotInput): Promise<AnalyticsSnapshotOutput>` — resolves an `Integration` row from DB (scoped to tenant, `disabled=false, deletedAt=null`), finds the provider in `socialIntegrationList`, calls `provider.analytics(internalId, token, periodDays)`. Returns `supported=false` when no integration found or provider lacks `analytics()`. Returns `supported=true, data=[]` with a note on provider errors (no throws). No LLM call.
+  - `AnalyticsSnapshotInput { platform: string, integrationId?: string, periodDays?: number }`.
+  - `AnalyticsSnapshotOutput { platform, integrationId, integrationName, data: AnalyticsData[], capturedAt: string, periodDays, supported: boolean, note?: string }`.
+  - `analyticsSnapshotSkill: SkillEntry` — id: `'analytics_snapshot'`, cost: 1.
+  - **No token refresh** — expired tokens return empty data with a warning log. Token refresh stays in `IntegrationService`.
+- **Rollback post skill**: `autopilot/skills/rollback_post.ts`. Exports:
+  - `handleRollback(ctx: SkillContext, input: RollbackPostInput): Promise<RollbackPostOutput>` — looks up `ApPublishedPost` by `(id, organizationId=tenant.id)`. Runs a single `$transaction`: (1) `post.updateMany({ where: { id: postizPostId, deletedAt: null }, data: { deletedAt: now } })` — soft-delete; (2) `apPostCandidate.update({ status: FAILED, metadata: merge+rollbackMeta })`; (3) `apPublishedPost.update({ metadata: merge+rollbackMeta })`. Idempotent: if `metadata.rolledBack===true` returns immediately without re-running.
+  - `RollbackPostInput { publishedPostId: string, reason?: string }`.
+  - `RollbackPostOutput { publishedPostId, postizPostId, platform, rolledBack: boolean, platformDeleted: false, note: string }` — `platformDeleted` is always `false` (no provider-level delete API in Postiz).
+  - `rollbackPostSkill: SkillEntry` — id: `'rollback_post'`, cost: 2.
+
+### Key files added in Phase 3 — slices 3.4–3.5
+- **Researcher agent**: `autopilot/agents/researcher.ts`. Exports:
+  - `searchTavily(query, depth?, maxResults?): Promise<ResearchFinding[]>` — calls Tavily search API via native `fetch`. Requires `AP_TAVILY_API_KEY`.
+  - `runApifyActor(actorId, input, maxItems?): Promise<Record<string, unknown>[]>` — generic Apify actor runner: start run → poll (3s interval, 120s timeout) → fetch dataset items. Requires `AP_APIFY_API_KEY`.
+  - `scrapeCompetitor(handle, platforms, maxItems?): Promise<ResearchFinding[]>` — builds profile URLs from `COMPETITOR_URL_TEMPLATES` map (twitter, linkedin, instagram, facebook, tiktok, youtube, threads), runs web content crawler actor (overridable via `AP_APIFY_SCRAPER_ACTOR` env var), returns findings with content truncated to 2000 chars.
+  - `runResearcher(ctx: AgentContext, input: ResearcherInput): Promise<ResearcherOutput>` — routes to `searchTavily` or `scrapeCompetitor` based on `input.type`, generates LLM summary via `generateObject`.
+  - `researcherAgent: AgentDefinition<ResearcherInput, ResearcherOutput>` — id: `'researcher'`.
+  - `ResearcherInput { query, type?: 'web_search' | 'competitor_scrape', depth?, maxResults?, handle?, platforms? }`.
+  - `ResearchFinding { title, url, content, relevance, source: 'tavily' | 'apify' }`.
+  - `ResearcherOutput { findings, summary, query, type }`.
+- **Skill costs registered**: `rewrite_for_platform: 3`, `research_topic: 2`, `research_competitor: 5` in `autopilot/skill-costs.ts`.
 
 ### Non-obvious gotchas (append as discovered)
 - **No Prisma migrations** — Postiz uses `prisma db push` exclusively. When slice definitions say "migration generated/applied," interpret as: add model to `schema.prisma`, run `pnpm prisma-db-push`, regenerate client with `pnpm prisma-generate`.
@@ -755,9 +819,155 @@ Each slice is short enough for a single session. If a slice feels heavy, it's ac
 - **Definition of done:** `seedEvergreen` creates a row; `pickFallback` on empty pool returns null; `pickFallback` returns RESERVED item and pool count stays the same (clone created); `poolSize` counts correctly; `popTop` naturally prefers priority-0 candidates over priority-(-1) evergreen; `pop-and-publish` uses fallback when stack is empty; typecheck passes; all autopilot tests green.
 - **Out of scope:** UI to manage the evergreen pool, per-platform pool rotation strategy (Phase 3).
 
-### Phases 2–9 — summarized
+### Phase 3 — Generation sub-agents
 
-Later phases list slice IDs and one-line goals in §Status tracker. **Before starting any slice in Phase 2+, expand it in this file** with the same structure used above (Goal / Depends on / Files / Definition of done / Out of scope). That expansion is itself the first activity of the session; commit it separately from implementation if helpful.
+#### Slice 3.1 — Copywriter agent (draft generation, voice-aware)
+
+- **Goal:** Define the `copywriterAgent` (`AgentDefinition`) that generates social media post drafts for a given platform, infused with the tenant's brand voice from `ApBusinessProfile` and relevant context from vector memory.
+- **Depends on:** 0.6 (AgentDefinition types), 1.1 (ApBusinessProfile for brand voice), 1.6 (Memory service for vector recall), 0.16 (LLM wiring for generation).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/agents/copywriter.ts` — new agent file
+  - `libraries/nestjs-libraries/src/autopilot/agents/copywriter.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/agents/index.ts` — re-export
+- **Exported API:**
+  - `runCopywriter(ctx: AgentContext, input: CopywriterInput): Promise<CopywriterOutput>` — loads profile + memory, builds voice-aware system prompt, calls `generateObject` to produce structured draft(s).
+  - `copywriterAgent: AgentDefinition<CopywriterInput, CopywriterOutput>` — registry entry.
+  - `CopywriterInput { platform, topic, count?, guidelines? }` — what to write about, how many drafts, optional extra constraints.
+  - `CopywriterOutput { drafts: CopywriterDraft[] }` — array of generated drafts.
+  - `CopywriterDraft { content, hookType?, cta?, hashtags?, characterCount }` — a single draft with optional structural metadata.
+- **Design notes:**
+  - Loads `getStructuredProfile()` to extract brand voice (short + extended), niche, goals, anti-patterns.
+  - Queries `queryVector()` with the topic to find relevant anecdotes, brand rules, and learnings (top 5).
+  - Builds a system prompt that encodes platform constraints (character limits, conventions), brand voice, and memory context.
+  - Uses `generateObject` from `ai-v5` with a Zod schema for structured output.
+  - Handles missing profile gracefully (generic voice; still generates).
+  - `count` defaults to 1; each draft is independently generated within one LLM call.
+- **Definition of done:** unit tests cover: generating a draft with mocked LLM; voice context from business profile injected into system prompt; memory queried for relevant context; multiple drafts when `count > 1`; handles missing profile gracefully; `copywriterAgent` shape smoke test passes; typecheck passes.
+- **Out of scope:** pushing to stack (fan-out agent, slice 3.2), strategy patterns (Phase 4), platform-specific rewriting (slice 3.3), actual LLM integration tests.
+
+#### Slice 3.2 — Fan-out agent (intent → per-platform drafts → stacks)
+- **Goal:** Create the fan-out orchestrator that turns a topic into per-platform drafts (via Copywriter) and pushes them to the post-candidate stacks.
+- **Depends on:** 3.1 (Copywriter agent), 2.2 (stack push), 2.3 (cadence config for platform resolution).
+- **Files touched:**
+  - `autopilot/agents/fan_out.ts` (new) — `runFanOut`, `fanOutAgent`, `FanOutInput`, `FanOutOutput`, `FanOutPlatformResult`.
+  - `autopilot/agents/fan_out.spec.ts` (new) — 14 tests.
+  - `autopilot/agents/index.ts` — added `fan_out` export.
+- **Types:**
+  - `FanOutInput { topic, platforms?, guidelines?, countPerPlatform?, priority? }` — what to fan out, optional platform narrowing, optional extra constraints.
+  - `FanOutOutput { results: FanOutPlatformResult[], skipped: { platform, reason }[] }` — per-platform push results + skip reasons.
+  - `FanOutPlatformResult { platform, pushed, candidateIds }` — summary for one platform.
+- **Design notes:**
+  - When `platforms` is omitted, resolves target platforms from active non-paused `ap_cadence_config` rows for the tenant (same query pattern as DepthEnforcerService/SlotSchedulerService).
+  - Calls `runCopywriter()` per platform sequentially (avoids overwhelming LLM with concurrent requests).
+  - Pushes each draft via `push()` with `priority=10` (above stock-keeper fills), `source='fan_out_agent'`, and metadata containing topic/hookType/cta/hashtags.
+  - Per-platform error isolation: a failure on one platform skips it and continues with the rest.
+  - `countPerPlatform` clamped to [1, 5]; defaults to 1.
+- **Definition of done:** unit tests cover: explicit platform fan-out; auto-resolve from cadence config; multiple drafts per platform; priority/metadata passthrough; error isolation (one platform fails, others continue); empty platform list; AgentDefinition shape; typecheck passes.
+- **Out of scope:** wiring into chat service `direct_action` intent (separate integration slice), strategy patterns (Phase 4), platform-specific rewriting (slice 3.3), cron-based refill triggers.
+
+#### Slice 3.3 — Platform rewrite skill (draft → platform-tuned variant)
+
+- **Goal:** A registered skill that takes an existing draft (written for one platform) and rewrites it for a different target platform, adapting tone, length, conventions, and hashtag strategy while preserving the core message and brand voice.
+- **Depends on:** 3.1 (PLATFORM_SPECS from copywriter), 1.6 (getStructuredProfile for voice), 0.16 (LLM wiring), 0.3 (SkillEntry types).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/agents/copywriter.ts` — export `PLATFORM_SPECS`, `DEFAULT_PLATFORM_SPEC`, `PlatformSpec` (were private)
+  - `libraries/nestjs-libraries/src/autopilot/skills/rewrite_for_platform.ts` — new skill file
+  - `libraries/nestjs-libraries/src/autopilot/skills/rewrite_for_platform.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/skills/index.ts` — register in SKILL_REGISTRY
+  - `libraries/nestjs-libraries/src/autopilot/skill-costs.ts` — add `rewrite_for_platform: 3`
+- **Exported API from rewrite_for_platform.ts:**
+  - `RewriteInput { draft, sourcePlatform?, targetPlatform, guidelines? }`
+  - `RewriteOutput { content, hookType?, cta?, hashtags?, characterCount, originalDraft, platform }`
+  - `handleRewrite(ctx: SkillContext, input: RewriteInput): Promise<RewriteOutput>` — loads profile for voice, resolves platform specs, calls `generateObject` with Zod schema.
+  - `buildRewritePrompt(sourceSpec, targetSpec, profile, guidelines?)` — pure function, exported for testing.
+  - `rewriteForPlatformSkill: SkillEntry<RewriteInput, RewriteOutput>` — id: `'rewrite_for_platform'`.
+- **Definition of done:** skill registered in `SKILL_REGISTRY`; handles source/target platform specs; injects brand voice; graceful fallback when profile missing; handles unknown platforms with generic spec; unit tests pass; typecheck passes.
+- **Out of scope:** integration with fan-out agent (future slice), cron-based rewriting, UI surface.
+
+#### Slice 3.4 — Researcher agent (Tavily integration)
+
+- **Goal:** Create the researcher agent with web search capability via the Tavily API. Returns structured findings and an LLM-generated summary contextualized to the tenant's niche.
+- **Depends on:** 0.6 (AgentDefinition types), 1.6 (getStructuredProfile for niche context), 0.16 (LLM wiring for summary generation), 0.1 (AP_TAVILY_API_KEY env var).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/agents/researcher.ts` — new agent file
+  - `libraries/nestjs-libraries/src/autopilot/agents/researcher.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/agents/index.ts` — re-export
+  - `libraries/nestjs-libraries/src/autopilot/skill-costs.ts` — add `research_topic: 2`
+- **Exported API from researcher.ts:**
+  - `ResearcherInput { query, type?: 'web_search' | 'competitor_scrape', depth?, maxResults?, handle?, platforms? }`
+  - `ResearchFinding { title, url, content, relevance, source: 'tavily' | 'apify' }`
+  - `ResearcherOutput { findings, summary, query, type }`
+  - `searchTavily(query, depth?, maxResults?): Promise<ResearchFinding[]>` — direct Tavily API call via `fetch`.
+  - `runResearcher(ctx, input): Promise<ResearcherOutput>` — main entry: calls searchTavily, then generates LLM summary.
+  - `researcherAgent: AgentDefinition<ResearcherInput, ResearcherOutput>` — id: `'researcher'`.
+- **Tavily integration details:** POST `https://api.tavily.com/search` with `{ api_key, query, search_depth, max_results }`. Uses native `fetch()`. Requires `AP_TAVILY_API_KEY`.
+- **Definition of done:** searchTavily returns structured findings; runResearcher generates niche-aware summary; graceful fallback when profile missing; generic summary when LLM fails; early return for empty findings; unit tests pass; typecheck passes.
+- **Out of scope:** writing findings to memory (memorist integration), cron-based research, UI surface.
+
+#### Slice 3.5 — Researcher agent (Apify basic)
+
+- **Goal:** Extend the researcher agent with structured scraping via Apify for competitor analysis. Adds a generic Apify actor runner and a competitor scrape function that builds profile URLs and crawls them.
+- **Depends on:** 3.4 (researcher agent base), 0.1 (AP_APIFY_API_KEY env var).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/agents/researcher.ts` — add Apify functions
+  - `libraries/nestjs-libraries/src/autopilot/agents/researcher.spec.ts` — add Apify tests
+  - `libraries/nestjs-libraries/src/autopilot/skill-costs.ts` — add `research_competitor: 5`
+- **Exported API added to researcher.ts:**
+  - `runApifyActor(actorId, input, maxItems?): Promise<Record<string, unknown>[]>` — generic Apify actor runner: start run → poll for completion → fetch dataset items. Timeout: 120s. Poll interval: 3s.
+  - `scrapeCompetitor(handle, platforms, maxItems?): Promise<ResearchFinding[]>` — builds profile URLs from `COMPETITOR_URL_TEMPLATES` (twitter, linkedin, instagram, facebook, tiktok, youtube, threads), runs `apify/website-content-crawler` actor (overridable via `AP_APIFY_SCRAPER_ACTOR`), returns findings. Content truncated to 2000 chars.
+- **Apify integration details:** Start run: POST `https://api.apify.com/v2/acts/{actorId}/runs?token={key}`. Poll: GET `.../actor-runs/{runId}?token={key}`. Dataset: GET `.../datasets/{datasetId}/items?token={key}&limit={n}`.
+- **Definition of done:** runApifyActor handles start → poll → fetch lifecycle; scrapeCompetitor builds correct URLs for all supported platforms; handles unknown platforms (empty result); content truncated; custom actor override via env var; runResearcher routes to scrapeCompetitor when `type='competitor_scrape'`; throws when handle missing; defaults to twitter; unit tests pass; typecheck passes.
+- **Out of scope:** deep research (Pro tier), actor-specific input schemas, result caching, rate limiting.
+
+### Phase 4 — Learning loop
+
+#### Slice 4.1 — Analytics snapshot skill (per platform, reuse Postiz where possible)
+
+- **Goal:** A registered skill that fetches per-platform analytics for a tenant by delegating to the existing Postiz integration provider `analytics()` methods. Returns structured engagement data (impressions, likes, comments, shares, etc.) for a configurable look-back window.
+- **Depends on:** 0.3 (SkillEntry types), 0.16 (LLM wiring not needed here, but `SkillContext` is required), 2.6 (ApPublishedPost exists so there are meaningful published posts to query analytics for).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/skills/analytics_snapshot.ts` — new skill file
+  - `libraries/nestjs-libraries/src/autopilot/skills/analytics_snapshot.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/skills/index.ts` — register in SKILL_REGISTRY
+  - `libraries/nestjs-libraries/src/autopilot/skill-costs.ts` — add `analytics_snapshot: 1`
+- **Exported API from analytics_snapshot.ts:**
+  - `AnalyticsSnapshotInput { platform: string, integrationId?: string, periodDays?: number }` — platform = Postiz providerIdentifier (e.g. `'twitter'`, `'linkedin'`); integrationId = Postiz Integration.id for disambiguation when a tenant has multiple accounts per platform; periodDays defaults to 30.
+  - `AnalyticsSnapshotOutput { platform, integrationId, integrationName, data: AnalyticsData[], capturedAt: string, periodDays: number, supported: boolean }` — `data` is the raw `AnalyticsData[]` from the Postiz interface; `supported=false` when the provider has no `analytics()` method.
+  - `handleAnalyticsSnapshot(ctx: SkillContext, input: AnalyticsSnapshotInput): Promise<AnalyticsSnapshotOutput>` — looks up the Integration row from DB using `ctx.db`, finds the provider via `socialIntegrationList`, calls `provider.analytics(internalId, token, periodDays)`. Gracefully returns empty data on any error.
+  - `analyticsSnapshotSkill: SkillEntry<AnalyticsSnapshotInput, AnalyticsSnapshotOutput>` — id: `'analytics_snapshot'`.
+- **Integration resolution:** Query `db.integration.findFirst({ where: { organizationId: tenant.id, providerIdentifier: platform, disabled: false, deletedAt: null } })`. If `integrationId` is provided, add `id: integrationId` to the where clause. If no integration found, return `{ supported: false, data: [] }`.
+- **No token refresh:** The skill does not refresh tokens — if the token is expired it returns the stale data or empty data. Token refresh remains the responsibility of IntegrationService (only called through the full auth flow). Log a warning on auth errors.
+- **No LLM call:** This skill is purely a data fetch. Credit cost is 1 (minimal compute).
+- **AnalyticsData type:** imported from `@gitroom/nestjs-libraries/integrations/social/social.integrations.interface` (already used in `integration.service.ts`).
+- **Definition of done:** skill registered in SKILL_REGISTRY; unit tests cover: integration found + analytics returned; integration not found → supported=false; provider has no analytics method → supported=false; analytics call throws → returns empty with error note; typecheck passes.
+- **Out of scope:** token refresh (IntegrationService's responsibility), caching (IntegrationService handles that via Redis), writing analytics into memory (Analyzer agent, slice 4.4), LLM summarization (Analyzer agent, slice 4.4), multi-platform batch (call the skill once per platform), UI surface.
+
+#### Slice 4.2 — Rollback skill (delete from platform + mark row)
+
+- **Goal:** A registered skill that marks an autopilot-published post as rolled back in the autopilot DB layer: soft-deletes the linked Postiz `Post` row and annotates the `ApPublishedPost` and `ApPostCandidate` records. "Delete from platform" at the DB level means removing the Postiz Post from the scheduler — actual retraction of live platform content is not supported by Postiz's integration abstraction (no provider-level delete API exists).
+- **Depends on:** 2.6 (`ApPublishedPost` + `ApPostCandidate` + `ApScheduledSlot` schema), 2.7 (published_posts table), 0.3 (SkillEntry types).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/skills/rollback_post.ts` — new skill file
+  - `libraries/nestjs-libraries/src/autopilot/skills/rollback_post.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/skills/index.ts` — register in SKILL_REGISTRY
+  - `libraries/nestjs-libraries/src/autopilot/skill-costs.ts` — add `rollback_post: 2`
+- **Exported API from rollback_post.ts:**
+  - `RollbackPostInput { publishedPostId: string, reason?: string }` — `publishedPostId` = `ApPublishedPost.id`. `reason` is stored in metadata for auditability.
+  - `RollbackPostOutput { publishedPostId: string, postizPostId: string, platform: string, rolledBack: boolean, platformDeleted: boolean, note: string }` — `platformDeleted` is always `false` with a note explaining that live platform content must be manually retracted.
+  - `handleRollback(ctx: SkillContext, input: RollbackPostInput): Promise<RollbackPostOutput>` — all three DB mutations run in a single `$transaction`.
+  - `rollbackPostSkill: SkillEntry<RollbackPostInput, RollbackPostOutput>` — id: `'rollback_post'`.
+- **Rollback steps (inside one `$transaction`):**
+  1. Load `ApPublishedPost` by `id=publishedPostId, organizationId=tenant.id` — if not found throw `Error('not_found')`.
+  2. Soft-delete the Postiz `Post` row: `db.post.updateMany({ where: { id: postizPostId, deletedAt: null }, data: { deletedAt: new Date() } })`. Idempotent — if already deleted that's fine.
+  3. Mark `ApPostCandidate` status = `FAILED`: `db.apPostCandidate.update({ where: { id: publishedPost.postCandidateId }, data: { status: 'FAILED', metadata: { ...existingMeta, rolledBack: true, rollbackReason: reason, rollbackAt: now } } })`.
+  4. Update `ApPublishedPost.metadata`: add `{ rolledBack: true, rollbackReason: reason, rollbackAt: now }`.
+- **Idempotency:** If `ApPublishedPost.metadata.rolledBack === true`, return success immediately without re-running the transaction (already rolled back).
+- **Definition of done:** skill registered in SKILL_REGISTRY; unit tests cover: successful rollback updates all three rows; calling twice is idempotent; wrong tenant ID throws; Postiz Post already deleted → still succeeds; typecheck passes.
+- **Out of scope:** platform-side deletion (no Postiz provider delete API), BullMQ job cancellation (the post has already been published when rollback is called; the BullMQ job completed long ago), UI surface (Phase 5+), Analyzer agent wiring (slice 4.4).
+
+### Phases 5–9 — summarized
+
+Later phases list slice IDs and one-line goals in §Status tracker. **Before starting any slice in Phase 5+, expand it in this file** with the same structure used above (Goal / Depends on / Files / Definition of done / Out of scope). That expansion is itself the first activity of the session; commit it separately from implementation if helpful.
 
 This keeps the guide from bloating with pre-written detail that would drift before it's used.
 
@@ -816,6 +1026,14 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-20 | 2.9 | done | autopilot/stack/stale-sweeper.service.ts (StaleSweeperService.sweepAll wraps expire()); apps/cron/src/tasks/sweep-stale-candidates.ts (@Cron hourly at :30); cron.module.ts updated
 2026-04-20 | 2.10 | done | autopilot/stack/depth-enforcer.service.ts (DepthEnforcerService.enforceAll; MIN_STACK_ABSOLUTE=3, MIN_STACK_DAYS_BUFFER=2; calls assessStock per active cadence config); apps/cron/src/tasks/enforce-stack-depth.ts (@Cron every 15 min); cron.module.ts updated; typecheck green
 2026-04-20 | 2.11 | done | autopilot/stack/evergreen-pool.service.ts (EvergreenPoolService: seedEvergreen, pickFallback clone-restore pattern, poolSize); evergreen-pool.spec.ts (17 tests pass); pop-and-publish.service.ts updated (pickFallback fallback after empty popTop; skipReason='empty_stack_no_evergreen'); cron.module.ts updated; 187 autopilot tests green; typecheck green
+2026-04-20 | 2.12 | done | autopilot/stack/cadence-config.service.ts (CadenceConfigService: pause, resume, get, isPaused; applyCadenceConfig applier registered for 'cadence_config' entity); cadence-config.spec.ts (18 tests pass); api.module.ts updated (CadenceConfigService in providers); 205 autopilot tests green
+2026-04-20 | 3.1 | done | autopilot/agents/copywriter.ts (runCopywriter, copywriterAgent; voice-aware platform-specific draft generation via generateObject + getStructuredProfile + queryVector); copywriter.spec.ts (19 tests pass); agents/index.ts updated; 224 autopilot tests green
+2026-04-20 | 3.2 | done | autopilot/agents/fan_out.ts (runFanOut, fanOutAgent; resolves platforms from cadence config, calls runCopywriter per platform, pushes to stack); fan_out.spec.ts (14 tests pass); agents/index.ts updated; typecheck green
+2026-04-20 | 3.3 | done | autopilot/skills/rewrite_for_platform.ts (handleRewrite, buildRewritePrompt, rewriteForPlatformSkill; voice-aware cross-platform rewrite via generateObject); rewrite_for_platform.spec.ts (18 tests pass); skills/index.ts updated (SKILL_REGISTRY first entry); agents/copywriter.ts (exported PLATFORM_SPECS, DEFAULT_PLATFORM_SPEC, PlatformSpec); skill-costs.ts updated; 286 autopilot tests green
+2026-04-20 | 3.4 | done | autopilot/agents/researcher.ts (searchTavily via native fetch, runResearcher with LLM summary, researcherAgent); researcher.spec.ts (30 tests pass); agents/index.ts updated; skill-costs.ts updated (research_topic: 2)
+2026-04-20 | 3.5 | done | autopilot/agents/researcher.ts (runApifyActor generic actor runner with poll loop, scrapeCompetitor with COMPETITOR_URL_TEMPLATES for 7 platforms, AP_APIFY_SCRAPER_ACTOR override); researcher.spec.ts expanded; skill-costs.ts updated (research_competitor: 5); 286 autopilot tests green
+2026-04-20 | 4.1 | done | autopilot/skills/analytics_snapshot.ts (handleAnalyticsSnapshot, analyticsSnapshotSkill; resolves Integration from DB, delegates to socialIntegrationList provider.analytics(), graceful fallback for unsupported/errored providers); analytics_snapshot.spec.ts (16 tests); skills/index.ts + skill-costs.ts updated; 310 autopilot tests green
+2026-04-20 | 4.2 | done | autopilot/skills/rollback_post.ts (handleRollback, rollbackPostSkill; atomic $transaction: soft-delete Postiz Post, mark ApPostCandidate FAILED, annotate ApPublishedPost metadata; idempotent; tenant-scoped); rollback_post.spec.ts (8 tests); skills/index.ts + skill-costs.ts updated; 310 autopilot tests green
 <!-- entries end -->
 
 ---
