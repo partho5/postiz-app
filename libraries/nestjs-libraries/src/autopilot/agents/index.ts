@@ -6,3 +6,4 @@ export * from './stock-keeper';
 export * from './copywriter';
 export * from './fan_out';
 export * from './researcher';
+export * from './analyzer';

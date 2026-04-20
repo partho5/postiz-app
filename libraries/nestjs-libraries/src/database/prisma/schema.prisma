@@ -60,6 +60,7 @@ model Organization {
   apCadenceConfig         ApCadenceConfig[]
   apScheduledSlot         ApScheduledSlot[]
   apPublishedPost         ApPublishedPost[]
+  apTenantStrategyOptout  ApTenantStrategyOptout?
 }
 
 model Tags {
@@ -1171,4 +1172,54 @@ model ApPublishedPost {
   @@index([organizationId, publishedAt])
   @@index([postCandidateId])
   @@map("ap_published_post")
+}
+
+// ─── Slice 4.3: Strategy Patterns + Tenant Opt-out ────────────────────────────
+
+enum ApStrategyPatternType {
+  POSTING_FREQUENCY
+  CONTENT_FORMAT
+  ENGAGEMENT_HOOK
+  HASHTAG_STRATEGY
+  TIMING
+  TONE
+}
+
+/// Anonymized, cross-tenant strategy patterns derived by the Analyzer agent.
+/// No tenant-identifying information is stored here.
+model ApStrategyPattern {
+  id              String                @id @default(uuid())
+  /// Social platform this pattern was observed on (e.g. 'twitter', 'linkedin').
+  platform        String
+  /// Broad niche label if applicable — coarse-grained only (e.g. "SaaS", "E-commerce").
+  niche           String?
+  patternType     ApStrategyPatternType
+  /// Stable snake_case identifier used for upsert deduplication, e.g. "numbered_lists_drive_shares".
+  patternKey      String
+  title           String
+  description     String
+  /// Number of independent analyses that have corroborated this pattern.
+  evidenceCount   Int                   @default(1)
+  /// Aggregated performance metrics supporting this pattern.
+  performanceData Json                  @default("{}")
+  active          Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([platform, patternKey])
+  @@index([platform, patternType, active])
+  @@index([platform, niche, active])
+  @@map("ap_strategy_pattern")
+}
+
+/// Per-tenant opt-out from contributing to anonymized strategy pattern extraction.
+/// When a row exists for a tenant, the Analyzer agent skips pattern extraction for that tenant.
+model ApTenantStrategyOptout {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  optedOutAt     DateTime     @default(now())
+  reason         String?
+
+  @@map("ap_tenant_strategy_optout")
 }

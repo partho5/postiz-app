@@ -110,9 +110,9 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 ### Phase 4 — Learning loop
 - [x] 4.1 — Analytics snapshot skill (per platform, reuse Postiz where possible)
 - [x] 4.2 — Rollback skill (delete from platform + mark row)
-- [ ] 4.3 — Prisma: `strategy_patterns` + `tenant_strategy_optout` + migration
-- [ ] 4.4 — Analyzer agent (performance → tenant memory)
-- [ ] 4.5 — Analyzer: anonymized strategy pattern extraction
+- [x] 4.3 — Prisma: `strategy_patterns` + `tenant_strategy_optout` + migration
+- [x] 4.4 — Analyzer agent (performance → tenant memory)
+- [x] 4.5 — Analyzer: anonymized strategy pattern extraction
 - [ ] 4.6 — Opt-out setting surface in chat
 
 ### Phase 5 — Reports
@@ -311,6 +311,18 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
   - `RewriteOutput { content, hookType?, cta?, hashtags?, characterCount, originalDraft, platform }`.
 - **Copywriter exports added**: `PLATFORM_SPECS`, `DEFAULT_PLATFORM_SPEC`, `PlatformSpec` now exported from `autopilot/agents/copywriter.ts` (were private before 3.3).
 - **SKILL_REGISTRY**: first entry registered — `rewrite_for_platform` in `autopilot/skills/index.ts`.
+
+### Key files added in Phase 4 — slices 4.3–4.5
+- **ApStrategyPattern model**: `schema.prisma` (`@@map("ap_strategy_pattern")`). Key fields: `platform`, `niche?`, `patternType` (enum `ApStrategyPatternType`: `POSTING_FREQUENCY | CONTENT_FORMAT | ENGAGEMENT_HOOK | HASHTAG_STRATEGY | TIMING | TONE`), `patternKey` (stable snake_case identifier for dedup), `title`, `description`, `evidenceCount` (Int default 1 — incremented on upsert), `performanceData` (Json), `active`. `@@unique([platform, patternKey])` for upsert dedup. No Organization FK — intentionally cross-tenant.
+- **ApTenantStrategyOptout model**: `schema.prisma` (`@@map("ap_tenant_strategy_optout")`). `organizationId @unique` (one-per-tenant opt-out), FK → Organization. When a row exists for a tenant, the Analyzer skips pattern extraction for them.
+- **Analyzer agent**: `autopilot/agents/analyzer.ts`. Exports:
+  - `runAnalyzer(ctx: AgentContext, input: AnalyzerInput): Promise<AnalyzerOutput>` — loads recent `ApPublishedPost` rows + candidate content, loads business profile + growth rules, calls `generateObject` for insights + patterns, writes `LEARNING` memories via `writeVector`, upserts patterns via `apStrategyPattern.upsert` after opt-out check.
+  - `analyzerAgent: AgentDefinition<AnalyzerInput, AnalyzerOutput>` — id: `'analyzer'`, allowedSkills: `['analytics_snapshot']`.
+  - `AnalyzerInput { platform: string, periodDays?: number, analyticsData?: { data: AnalyticsData[], capturedAt: string, supported: boolean, note?: string } }`.
+  - `AnalyzerOutput { platform, periodDays, postsAnalyzed, insights: PerformanceInsight[], stored, patternsExtracted, optedOut }`.
+  - `PerformanceInsight { type: 'strength'|'weakness'|'opportunity'|'learning', title, description, confidence: 'high'|'medium'|'low' }`.
+  - Slice 4.5 embedded: opt-out check via `apTenantStrategyOptout.findUnique({ organizationId })`; upsert via `apStrategyPattern.upsert({ where: { platform_patternKey }, create: {..., evidenceCount: 1}, update: { evidenceCount: { increment: 1 } } })`.
+  - Pattern extraction skipped when tenant opted out or LLM returns empty patterns array.
 
 ### Key files added in Phase 4 — slices 4.1–4.2
 - **Analytics snapshot skill**: `autopilot/skills/analytics_snapshot.ts`. Exports:
@@ -1034,6 +1046,8 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-20 | 3.5 | done | autopilot/agents/researcher.ts (runApifyActor generic actor runner with poll loop, scrapeCompetitor with COMPETITOR_URL_TEMPLATES for 7 platforms, AP_APIFY_SCRAPER_ACTOR override); researcher.spec.ts expanded; skill-costs.ts updated (research_competitor: 5); 286 autopilot tests green
 2026-04-20 | 4.1 | done | autopilot/skills/analytics_snapshot.ts (handleAnalyticsSnapshot, analyticsSnapshotSkill; resolves Integration from DB, delegates to socialIntegrationList provider.analytics(), graceful fallback for unsupported/errored providers); analytics_snapshot.spec.ts (16 tests); skills/index.ts + skill-costs.ts updated; 310 autopilot tests green
 2026-04-20 | 4.2 | done | autopilot/skills/rollback_post.ts (handleRollback, rollbackPostSkill; atomic $transaction: soft-delete Postiz Post, mark ApPostCandidate FAILED, annotate ApPublishedPost metadata; idempotent; tenant-scoped); rollback_post.spec.ts (8 tests); skills/index.ts + skill-costs.ts updated; 310 autopilot tests green
+2026-04-20 | 4.3 | done | schema.prisma (ApStrategyPattern + ApStrategyPatternType enum + @@unique([platform,patternKey]); ApTenantStrategyOptout + @unique organizationId + Organization back-relation); db push applied; client regenerated
+2026-04-20 | 4.4+4.5 | done | autopilot/agents/analyzer.ts (runAnalyzer, analyzerAgent; loads posts+profile, generateObject for insights+patterns, writes LEARNING memories, upserts ApStrategyPattern respecting opt-out); analyzer.spec.ts (26 tests); agents/index.ts updated; 336 autopilot tests green; typecheck green
 <!-- entries end -->
 
 ---
