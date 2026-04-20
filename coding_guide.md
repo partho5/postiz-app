@@ -11,10 +11,11 @@
 1. Read this file top to bottom (it is the only file that needs re-reading each session).
 2. Check §Status tracker → pick the next unchecked slice (or the one the user named).
 3. Read §Architecture cheat sheet for paths/conventions — do **not** re-explore the repo if the answer is here.
-4. Read the slice definition. If it cites sections of `project_plan.md`, read only those sections.
-5. Execute the slice. Do **only** that slice.
-6. Update this file (see §Self-tracking protocol).
-7. Stop. Hand back to the user.
+4. **For every prior-slice service your slice will call:** read that service's actual source file and confirm the exact exported function signatures before writing any code. The file is authoritative; descriptions in this guide may lag.
+5. Read the slice definition. If it cites sections of `project_plan.md`, read only those sections.
+6. Execute the slice. Do **only** that slice.
+7. Update this file (see §Self-tracking protocol).
+8. Stop. Hand back to the user.
 
 ## Principles for Claude Code
 
@@ -25,6 +26,8 @@
 - **If a dependency is unmet,** do not do the dependency — stop and tell the user which slice must run first.
 - **If you discover a blocker** (missing library, broken build, architectural mismatch), record it in §Blockers and stop.
 - **If you learn something reusable** about the repo (paths, conventions, existing helpers), append it to §Architecture cheat sheet so the next session doesn't re-derive it.
+- **Never assume a prior slice's API from descriptions alone** — always read the actual file. Descriptions drift; source code doesn't.
+- **If your slice adds a NestJS injectable service**, verify it is listed in `AutopilotModule` (or the relevant module's) `providers` and `exports` before marking done. A service that isn't exported cannot be injected by later slices.
 - **Keep the build green.** Run typecheck/tests for touched packages when feasible. If setup is unclear, do the minimum smoke check.
 - **Never mark a slice done unless its Definition of done is met.** If partially done, leave unchecked, write what's complete in §Build log, and describe remaining work in §Carry-over.
 
@@ -34,7 +37,7 @@ After completing a slice, update **exactly these sections** of this file before 
 
 1. **§Status tracker** — check the box for the completed slice.
 2. **§Build log** — append one line: `YYYY-MM-DD | slice-id | outcome | files-touched`. Keep it dense.
-3. **§Architecture cheat sheet** — add any repo path, helper, convention, or gotcha worth preserving. Prefer updating existing entries over adding new ones.
+3. **§Architecture cheat sheet** — add any repo path, helper, convention, or gotcha worth preserving. Prefer updating existing entries over adding new ones. For any new service API your slice exports, record the **exact exported function signatures** (parameter names + types + return type), not just the file path — this is what prevents API drift in later sessions.
 4. **§Carry-over** — if anything was left undone, write it here. Clear it when picked up.
 5. **§Blockers** — if blocked, write here. Clear when resolved.
 
@@ -76,25 +79,25 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 1.4 — Proposal → confirm → apply pipeline
 - [x] 1.5 — Enable `pgvector` extension + `memory_vectors` table + migration
 - [x] 1.6 — Memory read/write service (structured + vector)
-- [ ] 1.7 — Memorist agent skeleton
-- [ ] 1.8 — Chat ingress endpoint (web source), writes `chat_messages`, routes to intent parser
-- [ ] 1.9 — Frontend: chatbot-primary layout scaffold (no agent wiring yet)
-- [ ] 1.10 — Frontend: card-select component for confirm UX
-- [ ] 1.11 — Frontend: wire chat UI to ingress endpoint (streamed response)
-- [ ] 1.12 — Onboarding first-run: seed `business_profile` via chat intent parser
+- [x] 1.7 — Memorist agent skeleton
+- [x] 1.8 — Chat ingress endpoint (web source), writes `chat_messages`, routes to intent parser
+- [x] 1.9 — Frontend: chatbot-primary layout scaffold (no agent wiring yet)
+- [x] 1.10 — Frontend: card-select component for confirm UX
+- [x] 1.11 — Frontend: wire chat UI to ingress endpoint (streamed response)
+- [x] 1.12 — Onboarding first-run: seed `business_profile` via chat intent parser
 
 ### Phase 2 — Stack + Scheduler
-- [ ] 2.1 — Prisma: `post_candidates` + migration
-- [ ] 2.2 — Stack primitives: push, pop_top, expire, depth
-- [ ] 2.3 — Prisma: `cadence_config` + migration
-- [ ] 2.4 — Prisma: `scheduled_slots` + migration
-- [ ] 2.5 — Slot scheduler cron (materialize next-N slots)
-- [ ] 2.6 — Pop-and-publish integration with Postiz publisher
-- [ ] 2.7 — Prisma: `published_posts` + migration (joins to candidates)
-- [ ] 2.8 — Stock keeper agent skeleton
-- [ ] 2.9 — Stale candidate sweeper cron
-- [ ] 2.10 — Stack depth enforcement (minimum N, never empty)
-- [ ] 2.11 — Evergreen fallback pool seed + retrieval
+- [x] 2.1 — Prisma: `post_candidates` + migration
+- [x] 2.2 — Stack primitives: push, pop_top, expire, depth
+- [x] 2.3 — Prisma: `cadence_config` + migration
+- [x] 2.4 — Prisma: `scheduled_slots` + migration
+- [x] 2.5 — Slot scheduler cron (materialize next-N slots)
+- [x] 2.6 — Pop-and-publish integration with Postiz publisher
+- [x] 2.7 — Prisma: `published_posts` + migration (joins to candidates)
+- [x] 2.8 — Stock keeper agent skeleton
+- [x] 2.9 — Stale candidate sweeper cron
+- [x] 2.10 — Stack depth enforcement (minimum N, never empty)
+- [x] 2.11 — Evergreen fallback pool seed + retrieval
 - [ ] 2.12 — Pause/resume: `cadence_config.paused_until` + slot scheduler respect
 
 ### Phase 3 — Generation sub-agents
@@ -200,9 +203,75 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - **Proposal pipeline**: `libraries/nestjs-libraries/src/autopilot/chat/proposals.ts`. Exports `createProposal`, `listPending`, `confirm`, `cancel`, `registerApplier`. Re-exported from `autopilot/chat/index.ts`.
 - **Built-in appliers**: `business_profile` (field-whitelisted upsert) and `growth_rule` (create or update by id) registered at module load. Add new appliers via `registerApplier(entity, fn)` from other modules.
 
+### Key files added in Phase 1 — slice 1.11
+- **chat-layout.tsx** (updated): `AutopilotChatLayout` now wires to `POST /autopilot/chat` via `useFetch`. Reads SSE stream with `response.body.getReader()` + `TextDecoder`. Events: `text` (streamed to `AssistantMsg`), `proposal` (renders `ProposalBubble` with `CardSelect`), `done` (clears streaming flag), `error` (renders `ErrorBubble`). Starter chips call `handleSend(prompt)` directly. Spinner shows while `sending=true`; textarea disabled during send.
+- **confirm/cancel endpoints**: `PATCH /autopilot/chat/proposals/:id/confirm` and `PATCH /autopilot/chat/proposals/:id/cancel` added to `AutopilotChatController`. Both guarded by `organizationId` check. Service methods: `confirmProposal(proposalId, tenantId): Promise<ConfirmResult>`, `cancelProposal(proposalId, tenantId): Promise<void>`.
+- **SSE parsing pattern**: `buffer += decoder.decode(value, { stream: true })`; split on `\n`; keep trailing partial line in buffer; parse lines starting with `data: `.
+
+### Key files added in Phase 1 — slice 1.10
+- **CardSelect component**: `apps/frontend/src/components/autopilot/card-select.tsx`. Exports `CardSelect` (FC) and `CardSelectOption`, `CardSelectProps` types. Props: `options: CardSelectOption[]` (`id`, `label`, `description?`), `onSelect(id: string): void`, `selectedId?: string` (controlled), `title?: string`, `disabled?: boolean`. Supports uncontrolled (internal state) and controlled modes. Keyboard accessible (Enter / Space). Renders a vertical list of bordered card buttons.
+
+### Key files added in Phase 1 — slice 1.9
+- **Autopilot chat UI**: `apps/frontend/src/components/autopilot/chat-layout.tsx`. Exports `AutopilotChatLayout` (FC, no props). Renders welcome state with starter chips when messages empty; `ChatBubble` for each message (user right-aligned / assistant left-aligned). Input: textarea + send button, Enter to send, Shift+Enter for newline. Local state only — no backend wiring yet (slice 1.11 wires it).
+- **Autopilot route**: `apps/frontend/src/app/(app)/(site)/autopilot/page.tsx` — renders `AutopilotChatLayout` inside the standard `(site)` layout.
+- **Nav item**: `Autopilot` added as first entry in `firstMenu` in `top.menu.tsx`, path `/autopilot`, speech-bubble SVG icon.
+
+### Key files added in Phase 1 — slices 1.7–1.8
+- **Memorist agent**: `autopilot/agents/memorist.ts`. Exports `runMemorist(ctx, input)` and `memoristAgent`. Input: `{ turns: MemoryTurn[] }`. Output: `{ decisions: MemoryDecision[], stored: number }`. Calls `writeVector(db, tenantId, entry)` for `store`/`update` decisions.
+- **AutopilotChatService**: `autopilot/chat/chat.service.ts`. NestJS `@Injectable`. Constructor: `(private _prisma: PrismaService)`. Main method: `handleChat(org, user, input: ChatIngressInput, emit: (event: ChatStreamEvent) => void): Promise<void>`. Stream event types: `ChatTextEvent | ChatProposalEvent | ChatDoneEvent | ChatErrorEvent`.
+- **AutopilotChatController**: `apps/backend/src/api/routes/autopilot-chat.controller.ts`. Authenticated route `POST /autopilot/chat`. Body: `{ content: string, source?: 'web'|'telegram'|'api' }`. Returns `text/event-stream` SSE. Registered in `authenticatedController` array in `api.module.ts`.
+
 ### Key files added in Phase 1 — slices 1.5–1.6
 - **Memory service**: `autopilot/memory/index.ts`. Exports `getStructuredProfile`, `writeVector`, `queryVector`, `listRecent`, `ensureVectorIndex`. All vector operations use `$queryRaw` / `$executeRaw` because the `embedding` column is `Unsupported("vector(1536)")` in Prisma.
 - **Embedding helper**: `embedText(text)` and `selectEmbeddingModel()` added to `autopilot/llm.ts`. Uses `@ai-sdk/openai` `text-embedding-3-small` (1536 dims). Requires `AP_OPENAI_API_KEY`.
+
+### Key files added in Phase 1 — slice 1.12
+- **Onboarding agent**: `autopilot/agents/onboarding.ts`. Exports `analyzeOnboarding(model: LanguageModel, history: OnboardingTurn[], latestMessage: string): Promise<OnboardingResult>`, `buildOnboardingReplyPrompt(topic: string, history: OnboardingTurn[]): string`, and `onboardingAgent: AgentDefinition`. `OnboardingResult` is `{ action: 'ask'; topic: string } | { action: 'propose'; draft: DraftProposal }`. Uses `generateObject` from `ai-v5` with a Zod schema to decide whether to ask another question or propose a business_profile.
+- **Chat service onboarding routing**: `chat.service.ts` now detects first-run (no `ApBusinessProfile` row for the tenant). When `isFirstRun`, loads conversation history via `_loadOnboardingHistory()` and routes through `analyzeOnboarding()` instead of the intent parser. The onboarding flow uses `streamText` with `messages` (full conversation context) for follow-up questions, and the existing `createProposal` → confirm → apply pipeline for the final profile proposal.
+- **Starter prompts updated**: First chip is now "Help me set up my business profile" (triggers onboarding for new tenants).
+
+### Key files added in Phase 2 — slice 2.11
+- **EvergreenPoolService**: `autopilot/stack/evergreen-pool.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService)`. Methods:
+  - `seedEvergreen(tenantId, platform, content, options?: SeedEvergreenOptions): Promise<ApPostCandidate>` — creates evergreen candidate (`source='evergreen'`, `expiresAt=null`, `priority=-1`).
+  - `pickFallback(tenantId, platform): Promise<ApPostCandidate | null>` — atomically reserves oldest PENDING evergreen, immediately clones it back to PENDING (pool size stays constant), returns the RESERVED row. Returns null if pool empty.
+  - `poolSize(tenantId, platform): Promise<number>` — count of PENDING evergreen candidates.
+- **PopAndPublishService updated**: When `popTop` returns null, calls `_evergreenPool.pickFallback()`; if still null marks slot SKIPPED with `skipReason='empty_stack_no_evergreen'`.
+- **Evergreen candidate conventions**: `source='evergreen'`, `expiresAt=null` (immune to stale sweeper), `priority=-1` (lower than regular candidates — `popTop` drains them last).
+
+### Key files added in Phase 2 — slices 2.8–2.10
+- **Stock keeper agent**: `autopilot/agents/stock-keeper.ts`. Exports:
+  - `assessStock(input: StockKeeperInput): StockKeeperOutput` — pure sync function; call directly in background services (no AgentContext needed).
+  - `runStockKeeper(ctx: AgentContext, input): Promise<StockKeeperOutput>` — async AgentDefinition wrapper.
+  - `stockKeeperAgent: AgentDefinition<StockKeeperInput, StockKeeperOutput>` — id: `'stock_keeper'`.
+  - `StockKeeperOutput.action`: `'ok' | 'refill'`; `deficit`: posts needed to reach `minDepth`.
+- **StaleSweeperService**: `autopilot/stack/stale-sweeper.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService)`. Method: `sweepAll(): Promise<number>` — calls `expire(db)` globally (no tenantId), returns count expired.
+- **SweepStaleCandidates cron**: `apps/cron/src/tasks/sweep-stale-candidates.ts`. `@Cron('30 * * * *')` — every hour at :30. Injects `StaleSweeperService`.
+- **DepthEnforcerService**: `autopilot/stack/depth-enforcer.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService)`. Method: `enforceAll(): Promise<EnforceAllResult>` — read-only; fetches active cadence configs, calls `depth()` + `assessStock()` per pair, warns on deficit. Constants: `MIN_STACK_ABSOLUTE=3`, `MIN_STACK_DAYS_BUFFER=2`. Result: `{ configs, ok, deficits, signals: StockKeeperOutput[] }`.
+- **EnforceStackDepth cron**: `apps/cron/src/tasks/enforce-stack-depth.ts`. `@Cron('*/15 * * * *')` — every 15 minutes. Injects `DepthEnforcerService`.
+
+### Key files added in Phase 2 — slices 2.6–2.7
+- **PopAndPublishService**: `autopilot/stack/pop-and-publish.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService, private _bullMq: BullMqClient)`. Main method: `triggerDueSlots(): Promise<TriggerResult>` — sweeps PENDING `ApScheduledSlot` rows with `scheduledAt ≤ now()`, atomically claims each via `updateMany({ where: { id, status:PENDING }, data:{ status:TRIGGERED } })` (concurrent-safe), pops a candidate with `popTop()`, creates a Postiz `Post` row (`state:'QUEUE'`, `publishDate:slot.scheduledAt`), emits `bullMq.emit('post', { id, options:{delay:0}, payload:{id} })`, writes an `ApPublishedPost` record. Returns `{ triggered, skipped, alreadyClaimed }`.
+- **TriggerDueSlots cron**: `apps/cron/src/tasks/trigger-due-slots.ts`. `@Cron('* * * * *')` — fires every minute. Injects `PopAndPublishService`, calls `triggerDueSlots()`. Logs only when there is activity.
+- **CronModule updated**: `apps/cron/src/cron.module.ts` — `PopAndPublishService` and `TriggerDueSlots` added to `providers`. `BullMqClient` is available via already-imported `BullMqModule`.
+- **ApPublishedPost model**: `schema.prisma` (`@@map("ap_published_post")`). Key fields: `organizationId`, `platform`, `postCandidateId` (FK → ApPostCandidate), `scheduledSlotId?` `@unique` (FK → ApScheduledSlot), `postizPostId` (Postiz Post.id), `publishedAt`, `releaseUrl?`, `metadata`. Indexes: `(organizationId, publishedAt)`, `(postCandidateId)`.
+
+### Key files added in Phase 2 — slice 2.5
+- **SlotSchedulerService**: `autopilot/stack/slot-scheduler.service.ts`. `@Injectable()`. Constructor: `(private _prisma: PrismaService)`. Main method: `materializeSlots(lookaheadDays?: number): Promise<MaterializeResult>` — inserts missing PENDING `ApScheduledSlot` rows for all active, non-paused cadence configs. Idempotent (exact-ms deduplication). Pure exported helpers: `wallClockToUtc(year, month, day, hour, minute, timezone): Date` (Intl probe technique, no external libs) and `buildSlotHHMMs(preferredTimes: string[], postsPerDay: number): string[]` (uses preferred times first, spreads remaining evenly).
+- **MaterializeSlots cron task**: `apps/cron/src/tasks/materialize-slots.ts`. `@Cron('0 * * * *')` — runs every hour at :00. Injects `SlotSchedulerService`, calls `materializeSlots(7)`.
+- **CronModule updated**: `apps/cron/src/cron.module.ts` — `SlotSchedulerService` and `MaterializeSlots` added to `providers`. `PrismaService` is available via the already-imported `DatabaseModule`.
+
+### Key files added in Phase 2 — slices 2.3–2.4
+- **ApCadenceConfig model**: `schema.prisma` (`@@map("ap_cadence_config")`). Enum `ApCadenceConfigSource`: `AI | USER | DEFAULT`. Key fields: `organizationId`, `platform`, `postsPerDay (Int default 1)`, `preferredTimes (Json default "[]")`, `timezone (String default "UTC")`, `pausedUntil (DateTime?)`, `active (Boolean default true)`, `source`, `version (Int default 1)`. Unique on `(organizationId, platform)`.
+- **ApScheduledSlot model**: `schema.prisma` (`@@map("ap_scheduled_slot")`). Enum `ApScheduledSlotStatus`: `PENDING | TRIGGERED | SKIPPED | CANCELLED`. Key fields: `organizationId`, `platform`, `scheduledAt (DateTime)`, `status (default PENDING)`, `postCandidateId (String?)` — FK to `ApPostCandidate` (null at creation; filled by pop-and-publish in slice 2.6), `metadata (Json)`. Indexes: `(organizationId, platform, scheduledAt, status)` for per-tenant scheduler query; `(scheduledAt, status)` for global cron sweep.
+- **ApPostCandidate updated**: added `apScheduledSlot ApScheduledSlot[]` back-relation.
+
+### Key files added in Phase 2 — slices 2.1–2.2
+- **ApPostCandidate model**: `schema.prisma` (`@@map("ap_post_candidate")`). Enum `ApPostCandidateStatus`: `PENDING | RESERVED | PUBLISHED | EXPIRED | FAILED`. Key fields: `organizationId`, `platform`, `content`, `contentVariants (Json)`, `mediaUrls (Json)`, `status`, `priority (Int default 0)`, `source (String)`, `expiresAt (DateTime?)`, `metadata (Json)`.
+- **Stack service**: `autopilot/stack/index.ts`. Exported functions:
+  - `push(db: PrismaClient, tenantId: string, platform: string, content: string, options?: PushOptions): Promise<ApPostCandidate>`
+  - `popTop(db: PrismaClient, tenantId: string, platform: string): Promise<ApPostCandidate | null>` — uses `SELECT … FOR UPDATE SKIP LOCKED` via `$queryRaw` + `$transaction`; returns a RESERVED row.
+  - `expire(db: PrismaClient, tenantId?: string): Promise<number>` — marks stale PENDING rows EXPIRED; omit tenantId for global sweep.
+  - `depth(db: PrismaClient, tenantId: string, platform?: string): Promise<number>` — count of PENDING non-expired candidates.
 
 ### Non-obvious gotchas (append as discovered)
 - **No Prisma migrations** — Postiz uses `prisma db push` exclusively. When slice definitions say "migration generated/applied," interpret as: add model to `schema.prisma`, run `pnpm prisma-db-push`, regenerate client with `pnpm prisma-generate`.
@@ -496,6 +565,196 @@ Each slice is short enough for a single session. If a slice feels heavy, it's ac
 - First-run chat flow: AI asks essential business profile questions (niche, goals, brand voice, primary platforms) via intent parser → proposals → confirm → apply. No bulk form; conversational.
 - **Definition of done:** a new tenant through this flow has a populated `business_profile` row without touching any non-chat UI.
 
+### Phase 2 — Stack + Scheduler
+
+#### Slice 2.1 — Prisma: `post_candidates` + migration
+- **Goal:** add the `ap_post_candidate` table that backs the per-tenant, per-platform post queue.
+- **Depends on:** 1.1 (Organization back-relations pattern established).
+- **Files touched:** `libraries/nestjs-libraries/src/database/prisma/schema.prisma` (new model `ApPostCandidate` + enum `ApPostCandidateStatus` + `Organization` back-relation); `pnpm prisma-db-push`; `pnpm prisma-generate`.
+- **Columns:**
+  - `id` — UUID PK
+  - `organizationId` — FK → Organization
+  - `platform` — String (e.g. `'twitter'`, `'linkedin'`)
+  - `content` — String (body text)
+  - `contentVariants` — Json `{}` (per-platform tuned variants, populated by fan-out agent)
+  - `mediaUrls` — Json `[]` (array of media URL strings)
+  - `status` — `ApPostCandidateStatus` enum: `PENDING | RESERVED | PUBLISHED | EXPIRED | FAILED`; default `PENDING`
+  - `priority` — Int default `0`; higher pops first
+  - `source` — String default `'unknown'`; identifies what created it (`'copywriter_agent'`, `'user'`, `'evergreen'`, …)
+  - `expiresAt` — `DateTime?`; if set and past, the candidate is treated as stale
+  - `metadata` — Json `{}`
+  - `createdAt` — `DateTime @default(now())`
+  - `updatedAt` — `DateTime @updatedAt`
+- **Indexes:**
+  - `(organizationId, platform, status, priority DESC, createdAt ASC)` — powers `popTop`
+  - `(organizationId, status, expiresAt)` — powers `expire` sweep
+- **Definition of done:** migration applies cleanly; Prisma client includes `apPostCandidate` accessor; `ApPostCandidateStatus` enum exported from `@prisma/client`.
+- **Out of scope:** any service code, publishing wiring, or scheduler logic.
+
+#### Slice 2.2 — Stack primitives: push, pop_top, expire, depth
+- **Goal:** implement the four core stack operations used by later slices (scheduler, publisher, stock keeper).
+- **Depends on:** 2.1 (ApPostCandidate table + types).
+- **Files touched:** `libraries/nestjs-libraries/src/autopilot/stack/index.ts` (real implementation replacing placeholder).
+- **Exported API:**
+  - `push(db, tenantId, platform, content, options?)` → `Promise<ApPostCandidate>` — creates a `PENDING` candidate; `options` carries `priority`, `source`, `expiresAt`, `mediaUrls`, `contentVariants`, `metadata`.
+  - `popTop(db, tenantId, platform)` → `Promise<ApPostCandidate | null>` — atomically claims the highest-priority non-expired `PENDING` candidate (order: `priority DESC`, `createdAt ASC`) and transitions it to `RESERVED`. Uses `SELECT … FOR UPDATE SKIP LOCKED` inside a transaction so concurrent callers never receive the same row.
+  - `expire(db, tenantId?)` → `Promise<number>` — bulk-sets `EXPIRED` on all `PENDING` candidates where `expiresAt < now()`. `tenantId` is optional; omitting it runs across all tenants (for the sweeper cron).
+  - `depth(db, tenantId, platform?)` → `Promise<number>` — count of `PENDING` non-expired candidates; `platform` is optional filter.
+- **Definition of done:** unit tests cover: `push` creates row; `depth` counts correctly; `popTop` returns highest-priority non-expired candidate and marks it `RESERVED`; `popTop` returns `null` on empty stack; `popTop` skips expired candidates; `expire` marks stale rows and returns count; typecheck passes.
+- **Out of scope:** publishing, cron wiring, slot scheduling (slice 2.5+).
+
+#### Slice 2.3 — Prisma: `cadence_config` + migration
+- **Goal:** add the `ap_cadence_config` table that drives the slot scheduler — one row per `(tenant, platform)` storing posting frequency, preferred times, timezone, and pause state.
+- **Depends on:** 2.1 (Organization ap_ back-relation pattern), 1.1 (ApUpdatedBy/ApGrowthRuleSource pattern for source enum).
+- **Files touched:** `schema.prisma` (new model `ApCadenceConfig` + enum `ApCadenceConfigSource` + `Organization` back-relation); `pnpm prisma-db-push`; `pnpm prisma-generate`.
+- **Columns:**
+  - `id` — UUID PK
+  - `organizationId` — FK → Organization
+  - `platform` — String (e.g. `'twitter'`, `'linkedin'`)
+  - `postsPerDay` — Int default `1`; target posts per calendar day
+  - `preferredTimes` — Json default `"[]"`; array of `"HH:MM"` strings (24h UTC) for preferred slot times; slot scheduler picks from this list when materializing
+  - `timezone` — String default `"UTC"`; IANA timezone used when converting `preferredTimes` to UTC slot datetimes
+  - `pausedUntil` — `DateTime?`; null means active; non-null means paused until this timestamp; slice 2.12 adds the pause/resume skill that writes this
+  - `active` — Boolean default `true`; false = platform excluded from all scheduling
+  - `source` — `ApCadenceConfigSource` enum: `AI | USER | DEFAULT`; tracks who last set this config
+  - `version` — Int default `1`; increment on every write so the proposal applier can do optimistic versioning (user edits win per project principle)
+  - `createdAt` — `DateTime @default(now())`
+  - `updatedAt` — `DateTime @updatedAt`
+- **Constraints/Indexes:**
+  - `@@unique([organizationId, platform])` — one config per tenant+platform
+- **Definition of done:** `db push` applies cleanly; Prisma client includes `apCadenceConfig` accessor; `ApCadenceConfigSource` enum exported; `Organization` model has `apCadenceConfig ApCadenceConfig[]` back-relation.
+- **Out of scope:** any service code, slot scheduler, pause/resume skill.
+
+#### Slice 2.4 — Prisma: `scheduled_slots` + migration
+- **Goal:** add the `ap_scheduled_slot` table that holds materialized future posting windows — one row per `(tenant, platform, scheduledAt)` time point generated by the slot scheduler cron.
+- **Depends on:** 2.3 (`ApCadenceConfig` schema pattern), 2.1 (`ApPostCandidate` back-relation for optional FK).
+- **Files touched:** `schema.prisma` (new model `ApScheduledSlot` + enum `ApScheduledSlotStatus` + `Organization` + `ApPostCandidate` back-relations); `pnpm prisma-db-push`; `pnpm prisma-generate`.
+- **Columns:**
+  - `id` — UUID PK
+  - `organizationId` — FK → Organization
+  - `platform` — String
+  - `scheduledAt` — DateTime; the exact UTC moment this slot should fire
+  - `status` — `ApScheduledSlotStatus` enum: `PENDING | TRIGGERED | SKIPPED | CANCELLED`; default `PENDING`
+  - `postCandidateId` — `String?`; FK → `ApPostCandidate`; null at creation; filled by pop-and-publish (slice 2.6) when the slot fires and a candidate is bound
+  - `metadata` — Json default `"{}"` ; reserved for scheduler notes (e.g. why a slot was skipped)
+  - `createdAt` — `DateTime @default(now())`
+  - `updatedAt` — `DateTime @updatedAt`
+- **Indexes:**
+  - `@@index([organizationId, platform, scheduledAt, status])` — primary scheduler query: fetch next PENDING slot per (org, platform)
+  - `@@index([scheduledAt, status])` — global cron sweep: find all PENDING slots due now across all tenants
+- **Definition of done:** `db push` applies cleanly; Prisma client includes `apScheduledSlot` accessor; `ApScheduledSlotStatus` enum exported; `Organization` model has `apScheduledSlot ApScheduledSlot[]` back-relation; `ApPostCandidate` model has `apScheduledSlot ApScheduledSlot[]` back-relation.
+- **Out of scope:** scheduler cron (slice 2.5), pop-and-publish (slice 2.6), any service logic.
+
+#### Slice 2.6 — Pop-and-publish integration with Postiz publisher
+
+- **Goal:** Create a cron task that sweeps PENDING `ApScheduledSlot` rows whose `scheduledAt ≤ now()`, pops the top candidate from the stack for each `(org, platform)`, creates a Postiz `Post` row, emits it to the BullMQ `'post'` queue, and records the result in `ap_published_posts`.
+- **Depends on:** 2.5 (`ApScheduledSlot` table + `SlotSchedulerService`), 2.2 (`popTop`), 2.7 (`ApPublishedPost` table — done in same session).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/stack/pop-and-publish.service.ts` — new `@Injectable()` service
+  - `apps/cron/src/tasks/trigger-due-slots.ts` — new `@Cron('* * * * *')` task
+  - `apps/cron/src/cron.module.ts` — register new providers
+- **Flow per due slot:**
+  1. Atomically claim the slot: `apScheduledSlot.updateMany({ where: { id, status: PENDING }, data: { status: TRIGGERED } })`. If `count=0`, skip (already claimed by concurrent runner).
+  2. Find first usable `Integration` for `(organizationId, providerIdentifier = platform)` where `disabled=false`, `refreshNeeded=false`, `deletedAt=null`.
+  3. `popTop(prisma, org, platform)` — atomically reserve a candidate.
+  4. If no integration or no candidate → revert slot to `SKIPPED` with `metadata.skipReason`.
+  5. If both found:
+     - `prisma.post.create({ state:'QUEUE', publishDate: slot.scheduledAt, organizationId, integrationId, content: candidate.content, group: makeId(10) })`
+     - `bullMq.emit('post', { id: post.id, options:{ delay:0 }, payload:{ id: post.id } })`
+     - Update slot: `{ postCandidateId: candidate.id }` (already TRIGGERED from step 1)
+     - Update candidate: `{ status: PUBLISHED }`
+     - `prisma.apPublishedPost.create({ organizationId, platform, postCandidateId, scheduledSlotId, postizPostId, publishedAt })`
+- **Definition of done:** `PopAndPublishService.triggerDueSlots()` compiles; cron task registered; concurrent-claim logic prevents double-processing; typecheck passes for touched packages.
+- **Out of scope:** retry logic on Postiz publish failure, stock-depth enforcement (slice 2.10), evergreen fallback (slice 2.11).
+
+#### Slice 2.7 — Prisma: `published_posts` + migration
+
+- **Goal:** Add the `ap_published_posts` table that records each autopilot publishing event — linking a candidate, a slot, and the resulting Postiz Post id.
+- **Depends on:** 2.4 (`ApScheduledSlot`), 2.1 (`ApPostCandidate`).
+- **Files touched:** `libraries/nestjs-libraries/src/database/prisma/schema.prisma` (new model `ApPublishedPost` + back-relations on `Organization`, `ApPostCandidate`, `ApScheduledSlot`); `pnpm prisma-db-push`; `pnpm prisma-generate`.
+- **Columns:**
+  - `id` — UUID PK
+  - `organizationId` — FK → Organization
+  - `platform` — String
+  - `postCandidateId` — String FK → ApPostCandidate
+  - `scheduledSlotId` — String? FK → ApScheduledSlot (null if published without a slot)
+  - `postizPostId` — String (the Postiz `Post.id` created for this publish event)
+  - `publishedAt` — DateTime @default(now())
+  - `releaseUrl` — String? (filled later when Postiz returns the platform URL)
+  - `metadata` — Json @default("{}")
+  - `createdAt` — DateTime @default(now())
+- **Indexes:**
+  - `@@index([organizationId, publishedAt])` — per-tenant audit queries
+  - `@@index([postCandidateId])` — look up publish record from a candidate
+- **Definition of done:** `db push` applies cleanly; Prisma client includes `apPublishedPost` accessor; `Organization` has `apPublishedPost ApPublishedPost[]` back-relation; `ApPostCandidate` has `apPublishedPost ApPublishedPost[]` back-relation; `ApScheduledSlot` has `apPublishedPost ApPublishedPost?` back-relation.
+- **Out of scope:** any UI surface, release URL back-fill (slice 4.1+).
+
+#### Slice 2.8 — Stock keeper agent skeleton
+
+- **Goal:** define the `stockKeeperAgent` (`AgentDefinition`) that monitors per-(tenant, platform) stack depth and signals when the candidate queue has dropped below its minimum threshold.
+- **Depends on:** 2.2 (`depth()` primitive), 0.6 (AgentDefinition types).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/agents/stock-keeper.ts` — new agent file
+  - `libraries/nestjs-libraries/src/autopilot/agents/stock-keeper.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/agents/index.ts` — re-export
+- **Exported API:**
+  - `assessStock(input: StockKeeperInput): StockKeeperOutput` — pure synchronous depth check; exported separately so the depth-enforcer service (2.10) can call it without a full `AgentContext`.
+  - `runStockKeeper(ctx: AgentContext, input: StockKeeperInput): Promise<StockKeeperOutput>` — async `AgentDefinition`-compatible wrapper.
+  - `stockKeeperAgent: AgentDefinition<StockKeeperInput, StockKeeperOutput>` — registry entry.
+  - `StockKeeperInput { tenantId, platform, currentDepth, minDepth }`, `StockKeeperOutput { action: 'ok'|'refill', tenantId, platform, currentDepth, minDepth, deficit }`.
+- **Skeleton note:** `run()` performs pure math (no LLM call). The system prompt is written for Phase 3 when the copywriter agent will be invoked on `'refill'` signals.
+- **Definition of done:** unit tests cover ok/refill boundary; `stockKeeperAgent` smoke test verifies shape; typecheck passes.
+- **Out of scope:** LLM-based topic recommendation, copywriter invocation (Phase 3).
+
+#### Slice 2.9 — Stale candidate sweeper cron
+
+- **Goal:** a scheduled cron that globally expires PENDING `ApPostCandidate` rows whose `expiresAt` has passed, across all tenants.
+- **Depends on:** 2.2 (`expire()` primitive).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/stack/stale-sweeper.service.ts` — thin NestJS injectable wrapping `expire(db)` (no tenantId = global sweep)
+  - `apps/cron/src/tasks/sweep-stale-candidates.ts` — `@Cron('30 * * * *')` task (every hour at :30, offset from materialize-slots which runs at :00)
+  - `apps/cron/src/cron.module.ts` — add `StaleSweeperService` + `SweepStaleCandidates` to `providers`
+- **Definition of done:** cron task registered; `StaleSweeperService.sweepAll()` calls `expire()` globally; only logs when count > 0; typecheck passes.
+- **Out of scope:** per-tenant sweeping (the global `expire()` with no tenantId already handles all tenants).
+
+#### Slice 2.10 — Stack depth enforcement
+
+- **Goal:** a scheduled service that checks every active (org, platform) pair against a minimum depth threshold, logs deficits, and emits `StockKeeperOutput` signals for future wiring to the copywriter.
+- **Depends on:** 2.2 (`depth()`), 2.3 (`ApCadenceConfig`), 2.8 (`assessStock`).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/stack/depth-enforcer.service.ts` — `@Injectable()` with `enforceAll(): Promise<EnforceAllResult>`
+  - `apps/cron/src/tasks/enforce-stack-depth.ts` — `@Cron('*/15 * * * *')` task (every 15 minutes)
+  - `apps/cron/src/cron.module.ts` — add `DepthEnforcerService` + `EnforceStackDepth` to `providers`
+- **Threshold formula:** `minDepth = max(MIN_STACK_ABSOLUTE=3, postsPerDay × MIN_STACK_DAYS_BUFFER=2)`. Both constants exported from the service file.
+- **Exported API from depth-enforcer.service.ts:**
+  - `MIN_STACK_ABSOLUTE: 3`, `MIN_STACK_DAYS_BUFFER: 2`
+  - `EnforceAllResult { configs, ok, deficits, signals: StockKeeperOutput[] }`
+  - `DepthEnforcerService.enforceAll(): Promise<EnforceAllResult>` — read-only; no writes; safe to call concurrently.
+- **Definition of done:** service fetches active cadence configs, checks depth per pair, calls `assessStock`, logs `warn` for each deficit (with note that copywriter wired in Phase 3); cron task registered; typecheck passes.
+- **Out of scope:** actually invoking the copywriter or any write path (Phase 3).
+
+#### Slice 2.11 — Evergreen fallback pool seed + retrieval
+
+- **Goal:** a permanent evergreen content pool (never depleted) that `PopAndPublishService` falls back to when the regular stack is empty. Provides two capabilities: seeding the pool with long-lived fallback posts, and retrieving one for immediate use while transparently restoring the pool.
+- **Depends on:** 2.2 (`push`, `ApPostCandidateStatus`), 2.6 (`PopAndPublishService` — to wire fallback in).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/stack/evergreen-pool.service.ts` — new `@Injectable()` service
+  - `libraries/nestjs-libraries/src/autopilot/stack/evergreen-pool.spec.ts` — unit tests
+  - `libraries/nestjs-libraries/src/autopilot/stack/pop-and-publish.service.ts` — inject `EvergreenPoolService`; call `pickFallback` when `popTop` returns null
+  - `apps/cron/src/cron.module.ts` — add `EvergreenPoolService` to `providers`
+- **Design notes:**
+  - Evergreen candidates are ordinary `ApPostCandidate` rows with `source='evergreen'`, `expiresAt=null` (immune to stale sweeper), `priority=-1` (lower than regular posts — consumed last by `popTop`).
+  - **`seedEvergreen(tenantId, platform, content, options?)`** — thin wrapper over `push()` enforcing `source='evergreen'`, `expiresAt=null`, `priority=-1`. Caller may override priority.
+  - **`pickFallback(tenantId, platform)`** — atomically finds the oldest PENDING evergreen candidate (FOR UPDATE SKIP LOCKED), marks it RESERVED, immediately creates a fresh PENDING clone (same content/metadata), returns the RESERVED row. Pool size stays constant. Returns null if pool is empty.
+  - **`poolSize(tenantId, platform)`** — count of PENDING evergreen candidates.
+  - `PopAndPublishService._processSlot` step 3: if `popTop` returns null → try `pickFallback`. If still null → SKIPPED with `skipReason='empty_stack_no_evergreen'`. If evergreen found → same publish flow as a regular candidate.
+- **Exported API from evergreen-pool.service.ts:**
+  - `EvergreenPoolService.seedEvergreen(tenantId, platform, content, options?): Promise<ApPostCandidate>`
+  - `EvergreenPoolService.pickFallback(tenantId, platform): Promise<ApPostCandidate | null>`
+  - `EvergreenPoolService.poolSize(tenantId, platform): Promise<number>`
+- **Definition of done:** `seedEvergreen` creates a row; `pickFallback` on empty pool returns null; `pickFallback` returns RESERVED item and pool count stays the same (clone created); `poolSize` counts correctly; `popTop` naturally prefers priority-0 candidates over priority-(-1) evergreen; `pop-and-publish` uses fallback when stack is empty; typecheck passes; all autopilot tests green.
+- **Out of scope:** UI to manage the evergreen pool, per-platform pool rotation strategy (Phase 3).
+
 ### Phases 2–9 — summarized
 
 Later phases list slice IDs and one-line goals in §Status tracker. **Before starting any slice in Phase 2+, expand it in this file** with the same structure used above (Goal / Depends on / Files / Definition of done / Out of scope). That expansion is itself the first activity of the session; commit it separately from implementation if helpful.
@@ -540,6 +799,23 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-16 | 1.4 | done | autopilot/chat/proposals.ts (createProposal, listPending, confirm, cancel, registerApplier; business_profile + growth_rule appliers); proposals.spec.ts (15 tests pass); chat/index.ts re-exports; all 98 autopilot tests green
 2026-04-16 | 1.5 | done | schema.prisma (previewFeatures=postgresqlExtensions; extensions=pgvector; ApMemoryVectorKind enum; ApMemoryVector model + Organization back-relation; Unsupported("vector(1536)") embedding); db push applied; IVFFLAT index created manually via postgres superuser; client regenerated
 2026-04-16 | 1.6 | done | llm.ts (selectEmbeddingModel, embedText using @ai-sdk/openai text-embedding-3-small); autopilot/memory/index.ts (getStructuredProfile, writeVector, queryVector via $queryRaw cosine-ops, listRecent, ensureVectorIndex); memory/index.spec.ts (8 tests pass); all 106 autopilot tests green
+2026-04-18 | 1.7 | done | autopilot/agents/memorist.ts (runMemorist, memoristAgent; store/skip/update decisions via generateObject); memorist.spec.ts (11 tests pass); agents/index.ts updated
+2026-04-18 | 1.8 | done | autopilot/chat/chat.service.ts (AutopilotChatService; SSE emit pattern; streamText for text responses, createProposal for config intents); apps/backend/src/api/routes/autopilot-chat.controller.ts (POST /autopilot/chat, text/event-stream); api.module.ts updated (AutopilotChatController + AutopilotChatService); chat/index.ts updated; all 117 autopilot tests green
+2026-04-18 | 1.9 | done | apps/frontend/src/components/autopilot/chat-layout.tsx (AutopilotChatLayout: welcome state, starter chips, ChatBubble, textarea input, send button; local state only); apps/frontend/src/app/(app)/(site)/autopilot/page.tsx (route); components/layout/top.menu.tsx (Autopilot nav item added at top of firstMenu); typecheck green
+2026-04-18 | 1.10 | done | apps/frontend/src/components/autopilot/card-select.tsx (CardSelect: options, onSelect, optional selectedId/title/disabled; controlled + uncontrolled; keyboard accessible); typecheck green
+2026-04-18 | 1.11 | done | apps/frontend/src/components/autopilot/chat-layout.tsx (SSE streaming, proposal/error bubbles, starter chips); apps/backend/src/api/routes/autopilot-chat.controller.ts (confirm/cancel routes); libraries/nestjs-libraries/src/autopilot/chat/chat.service.ts (confirmProposal, cancelProposal); typecheck green
+2026-04-19 | 1.12 | done | autopilot/agents/onboarding.ts (analyzeOnboarding, buildOnboardingReplyPrompt, onboardingAgent); chat/chat.service.ts (first-run detection, onboarding routing, _loadOnboardingHistory); agents/index.ts updated; chat-layout.tsx (starter prompts updated); typecheck green
+2026-04-19 | 2.1 | done | schema.prisma (ApPostCandidate + ApPostCandidateStatus enum + Organization back-relation); db push applied; client regenerated
+2026-04-19 | 2.2 | done | autopilot/stack/index.ts (push, popTop, expire, depth; SELECT FOR UPDATE SKIP LOCKED in popTop); stack/index.spec.ts (18 tests pass); all 135 autopilot tests green
+2026-04-19 | 2.3 | done | schema.prisma (ApCadenceConfig + ApCadenceConfigSource enum + Organization back-relation); db push applied; client regenerated
+2026-04-19 | 2.4 | done | schema.prisma (ApScheduledSlot + ApScheduledSlotStatus enum + Organization back-relation + ApPostCandidate back-relation); db push applied; client regenerated
+2026-04-19 | 2.5 | done | autopilot/stack/slot-scheduler.service.ts (wallClockToUtc, buildSlotHHMMs, SlotSchedulerService); stack/slot-scheduler.spec.ts (22 tests); apps/cron/src/tasks/materialize-slots.ts; apps/cron/src/cron.module.ts updated; all 157 autopilot tests green
+2026-04-19 | 2.7 | done | schema.prisma (ApPublishedPost + Organization/ApPostCandidate/ApScheduledSlot back-relations); db push applied; client regenerated
+2026-04-19 | 2.6 | done | autopilot/stack/pop-and-publish.service.ts (PopAndPublishService: atomic slot claim, integration lookup, popTop, Post create, BullMQ emit, apPublishedPost record); apps/cron/src/tasks/trigger-due-slots.ts (@Cron every minute); apps/cron/src/cron.module.ts updated; typecheck green
+2026-04-20 | 2.8 | done | autopilot/agents/stock-keeper.ts (assessStock, runStockKeeper, stockKeeperAgent); agents/stock-keeper.spec.ts (13 tests pass); agents/index.ts updated; all 170 autopilot tests green
+2026-04-20 | 2.9 | done | autopilot/stack/stale-sweeper.service.ts (StaleSweeperService.sweepAll wraps expire()); apps/cron/src/tasks/sweep-stale-candidates.ts (@Cron hourly at :30); cron.module.ts updated
+2026-04-20 | 2.10 | done | autopilot/stack/depth-enforcer.service.ts (DepthEnforcerService.enforceAll; MIN_STACK_ABSOLUTE=3, MIN_STACK_DAYS_BUFFER=2; calls assessStock per active cadence config); apps/cron/src/tasks/enforce-stack-depth.ts (@Cron every 15 min); cron.module.ts updated; typecheck green
+2026-04-20 | 2.11 | done | autopilot/stack/evergreen-pool.service.ts (EvergreenPoolService: seedEvergreen, pickFallback clone-restore pattern, poolSize); evergreen-pool.spec.ts (17 tests pass); pop-and-publish.service.ts updated (pickFallback fallback after empty popTop; skipReason='empty_stack_no_evergreen'); cron.module.ts updated; 187 autopilot tests green; typecheck green
 <!-- entries end -->
 
 ---
