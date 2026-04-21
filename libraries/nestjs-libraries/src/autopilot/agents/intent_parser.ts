@@ -90,8 +90,9 @@ const INTENT_CLASSES = [
 ].join('\n  ');
 
 const ENTITIES = [
-  'business_profile — fields: niche, goals, brandVoiceShort, brandVoiceExtended, antiPatterns, regulatoryFlags',
-  'growth_rule      — fields: ruleKey, ruleValue, active',
+  'business_profile        — fields: niche, goals, brandVoiceShort, brandVoiceExtended, antiPatterns, regulatoryFlags',
+  'growth_rule             — fields: ruleKey, ruleValue, active',
+  'tenant_strategy_optout  — field: optedOut (boolean). true = stop contributing anonymized strategy data; false = resume contributing. Singleton (targetId = null).',
 ].join('\n    ');
 
 const BASE_SYSTEM_PROMPT = `\

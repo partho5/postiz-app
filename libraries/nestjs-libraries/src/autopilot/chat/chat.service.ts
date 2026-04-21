@@ -142,15 +142,24 @@ export class AutopilotChatService {
       return;
     }
 
-    // Step 3: Load tenant context and detect first-run.
+    // Step 3: Load tenant context (profile + opt-out status) and detect first-run.
     let isFirstRun = false;
-    let tenantCtx: { niche?: string; goals?: unknown } | undefined;
+    let tenantCtx:
+      | { niche?: string; goals?: unknown; strategyOptout?: boolean }
+      | undefined;
     try {
-      const profile = await getStructuredProfile(this._prisma, org.id);
+      const [profile, optoutRow] = await Promise.all([
+        getStructuredProfile(this._prisma, org.id),
+        this._prisma.apTenantStrategyOptout.findUnique({
+          where: { organizationId: org.id },
+          select: { id: true },
+        }),
+      ]);
       if (profile.businessProfile) {
         tenantCtx = {
           niche: profile.businessProfile.niche || undefined,
           goals: profile.businessProfile.goals,
+          strategyOptout: optoutRow !== null,
         };
       } else {
         isFirstRun = true;
@@ -321,7 +330,7 @@ export class AutopilotChatService {
 
   private _buildReplyPrompt(
     intent: string,
-    tenantCtx?: { niche?: string; goals?: unknown },
+    tenantCtx?: { niche?: string; goals?: unknown; strategyOptout?: boolean },
   ): string {
     const lines = [
       'You are a helpful assistant for a social-media autopilot platform.',
@@ -329,11 +338,36 @@ export class AutopilotChatService {
     if (tenantCtx?.niche) {
       lines.push(`The user's business niche is: ${tenantCtx.niche}.`);
     }
+    if (tenantCtx?.strategyOptout !== undefined) {
+      const status = tenantCtx.strategyOptout ? 'opted out' : 'opted in';
+      lines.push(
+        `Data sharing: the user is currently ${status} of contributing anonymized strategy patterns.` +
+          ` Reading cross-tenant patterns is always enabled regardless of this setting.`,
+      );
+    }
     lines.push(`Detected intent: ${intent}.`);
     lines.push(
       'Reply concisely and helpfully. Do not reveal internal intent classification details to the user.',
     );
     return lines.join('\n');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Strategy opt-out status (slice 4.6)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Return the tenant's current strategy-pattern contribution opt-out status.
+   * Row present = opted out; row absent = opted in (the default).
+   */
+  async getStrategyOptoutStatus(
+    tenantId: string,
+  ): Promise<{ optedOut: boolean }> {
+    const row = await this._prisma.apTenantStrategyOptout.findUnique({
+      where: { organizationId: tenantId },
+      select: { id: true },
+    });
+    return { optedOut: row !== null };
   }
 
   // ---------------------------------------------------------------------------

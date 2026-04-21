@@ -47,6 +47,13 @@ type ProfileRow = {
   updatedAt: Date;
 };
 
+type OptoutRow = {
+  id: string;
+  organizationId: string;
+  optedOutAt: Date;
+  reason: string | null;
+};
+
 let nextId = 1;
 function uid() {
   return `id-${nextId++}`;
@@ -55,12 +62,16 @@ function uid() {
 function makeMockDb(
   initialProposals: ProposalRow[] = [],
   initialProfiles: ProfileRow[] = [],
+  initialOptouts: OptoutRow[] = [],
 ) {
   const proposals = new Map<string, ProposalRow>(
     initialProposals.map((p) => [p.id, { ...p }]),
   );
   const profiles = new Map<string, ProfileRow>(
     initialProfiles.map((p) => [p.organizationId, { ...p }]),
+  );
+  const optouts = new Map<string, OptoutRow>(
+    initialOptouts.map((o) => [o.organizationId, { ...o }]),
   );
 
   return {
@@ -133,9 +144,35 @@ function makeMockDb(
       },
     },
 
+    apTenantStrategyOptout: {
+      async upsert({ where, create }: any): Promise<OptoutRow> {
+        const existing = optouts.get(where.organizationId);
+        if (existing) {
+          return { ...existing }; // Already opted out — no-op (update: {})
+        }
+        const row: OptoutRow = {
+          id: uid(),
+          organizationId: create.organizationId,
+          optedOutAt: new Date(),
+          reason: create.reason ?? null,
+        };
+        optouts.set(row.organizationId, row);
+        return { ...row };
+      },
+      async deleteMany({ where }: any): Promise<{ count: number }> {
+        const existed = optouts.has(where.organizationId);
+        optouts.delete(where.organizationId);
+        return { count: existed ? 1 : 0 };
+      },
+      async findUnique({ where }: any): Promise<OptoutRow | null> {
+        return optouts.has(where.organizationId) ? { ...optouts.get(where.organizationId)! } : null;
+      },
+    },
+
     // Expose internals for assertions
     _proposals: proposals,
     _profiles: profiles,
+    _optouts: optouts,
   } as any;
 }
 
@@ -406,5 +443,106 @@ describe('registerApplier', () => {
     expect(result.ok).toBe(false);
     expect((result as any).reason).toBe('apply_error');
     expect((result as any).message).toContain('DB exploded');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// confirm — tenant_strategy_optout applier (slice 4.6)
+// ---------------------------------------------------------------------------
+
+describe('confirm — tenant_strategy_optout applier', () => {
+  it('creates the opt-out row when optedOut=true and no row exists', async () => {
+    const proposal = pendingProposal({
+      targetEntity: 'tenant_strategy_optout',
+      changes: { optedOut: true },
+    });
+    const db = makeMockDb([proposal]);
+
+    const result = await confirm(db, proposal.id);
+
+    expect(result.ok).toBe(true);
+    expect(db._proposals.get(proposal.id)!.status).toBe(ApProposalStatus.APPLIED);
+    expect(db._optouts.has(TENANT)).toBe(true);
+  });
+
+  it('is idempotent when already opted out (upsert no-op)', async () => {
+    const existingOptout: OptoutRow = {
+      id: uid(),
+      organizationId: TENANT,
+      optedOutAt: new Date(),
+      reason: null,
+    };
+    const proposal = pendingProposal({
+      targetEntity: 'tenant_strategy_optout',
+      changes: { optedOut: true },
+    });
+    const db = makeMockDb([proposal], [], [existingOptout]);
+
+    const result = await confirm(db, proposal.id);
+
+    expect(result.ok).toBe(true);
+    // Row still present; no duplicate inserted
+    expect(db._optouts.has(TENANT)).toBe(true);
+    expect(db._optouts.size).toBe(1);
+  });
+
+  it('deletes the opt-out row when optedOut=false (opt back in)', async () => {
+    const existingOptout: OptoutRow = {
+      id: uid(),
+      organizationId: TENANT,
+      optedOutAt: new Date(),
+      reason: null,
+    };
+    const proposal = pendingProposal({
+      targetEntity: 'tenant_strategy_optout',
+      changes: { optedOut: false },
+    });
+    const db = makeMockDb([proposal], [], [existingOptout]);
+
+    const result = await confirm(db, proposal.id);
+
+    expect(result.ok).toBe(true);
+    expect(db._optouts.has(TENANT)).toBe(false);
+  });
+
+  it('is idempotent when already opted in (deleteMany no-op)', async () => {
+    const proposal = pendingProposal({
+      targetEntity: 'tenant_strategy_optout',
+      changes: { optedOut: false },
+    });
+    const db = makeMockDb([proposal]);
+
+    const result = await confirm(db, proposal.id);
+
+    expect(result.ok).toBe(true);
+    expect(db._optouts.has(TENANT)).toBe(false);
+  });
+
+  it('stores the reason when provided with opt-out', async () => {
+    const proposal = pendingProposal({
+      targetEntity: 'tenant_strategy_optout',
+      changes: { optedOut: true, reason: 'privacy concerns' },
+    });
+    const db = makeMockDb([proposal]);
+
+    const result = await confirm(db, proposal.id);
+
+    expect(result.ok).toBe(true);
+    const row = db._optouts.get(TENANT)!;
+    expect(row.reason).toBe('privacy concerns');
+  });
+
+  it('ignores changes with neither true nor false (unknown optedOut value)', async () => {
+    const proposal = pendingProposal({
+      targetEntity: 'tenant_strategy_optout',
+      changes: { optedOut: 'maybe' }, // Invalid — neither true nor false
+    });
+    const db = makeMockDb([proposal]);
+
+    const result = await confirm(db, proposal.id);
+
+    // Applier silently skips; proposal still marked APPLIED
+    expect(result.ok).toBe(true);
+    expect(db._optouts.has(TENANT)).toBe(false);
   });
 });

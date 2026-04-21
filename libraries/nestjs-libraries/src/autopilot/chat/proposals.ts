@@ -160,9 +160,47 @@ async function applyGrowthRule(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Built-in applier: tenant_strategy_optout
+// ---------------------------------------------------------------------------
+
+/**
+ * Toggle strategy-pattern contribution opt-out for the tenant.
+ *
+ * Presence of an ApTenantStrategyOptout row = opted out.
+ * Absence = opted in (the default).
+ *
+ *   changes.optedOut === true  → upsert (create if absent; no-op if present)
+ *   changes.optedOut === false → deleteMany (remove the row; no-op if absent)
+ *
+ * All other change keys are silently ignored.
+ */
+async function applyTenantStrategyOptout(
+  db: PrismaClient,
+  tenantId: string,
+  _targetId: string | null,
+  changes: Record<string, unknown>,
+): Promise<void> {
+  if (changes.optedOut === true) {
+    await db.apTenantStrategyOptout.upsert({
+      where: { organizationId: tenantId },
+      create: {
+        organizationId: tenantId,
+        ...(typeof changes.reason === 'string' ? { reason: changes.reason } : {}),
+      },
+      update: {}, // Already opted out — no-op
+    });
+  } else if (changes.optedOut === false) {
+    await db.apTenantStrategyOptout.deleteMany({
+      where: { organizationId: tenantId },
+    });
+  }
+}
+
 // Register built-in appliers on module load.
 registerApplier('business_profile', applyBusinessProfile);
 registerApplier('growth_rule', applyGrowthRule);
+registerApplier('tenant_strategy_optout', applyTenantStrategyOptout);
 
 // ---------------------------------------------------------------------------
 // createProposal

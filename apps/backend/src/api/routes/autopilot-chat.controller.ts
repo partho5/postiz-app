@@ -22,6 +22,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   Param,
   Patch,
@@ -95,5 +96,18 @@ export class AutopilotChatController {
     @GetOrgFromRequest() org: Organization,
   ): Promise<void> {
     await this._chatService.cancelProposal(id, org.id);
+  }
+
+  /**
+   * GET /autopilot/chat/settings/strategy-optout
+   * Return the tenant's current strategy-pattern contribution opt-out status.
+   * Response: { optedOut: boolean }
+   */
+  @Get('/chat/settings/strategy-optout')
+  @HttpCode(200)
+  async getStrategyOptout(
+    @GetOrgFromRequest() org: Organization,
+  ): Promise<{ optedOut: boolean }> {
+    return this._chatService.getStrategyOptoutStatus(org.id);
   }
 }

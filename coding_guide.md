@@ -113,7 +113,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 4.3 — Prisma: `strategy_patterns` + `tenant_strategy_optout` + migration
 - [x] 4.4 — Analyzer agent (performance → tenant memory)
 - [x] 4.5 — Analyzer: anonymized strategy pattern extraction
-- [ ] 4.6 — Opt-out setting surface in chat
+- [x] 4.6 — Opt-out setting surface in chat
 
 ### Phase 5 — Reports
 - [ ] 5.1 — Report skill skeleton (kind, range, channel)
@@ -311,6 +311,13 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
   - `RewriteOutput { content, hookType?, cta?, hashtags?, characterCount, originalDraft, platform }`.
 - **Copywriter exports added**: `PLATFORM_SPECS`, `DEFAULT_PLATFORM_SPEC`, `PlatformSpec` now exported from `autopilot/agents/copywriter.ts` (were private before 3.3).
 - **SKILL_REGISTRY**: first entry registered — `rewrite_for_platform` in `autopilot/skills/index.ts`.
+
+### Key files added in Phase 4 — slice 4.6
+- **`tenant_strategy_optout` applier**: registered in `proposals.ts` at module load alongside `business_profile` and `growth_rule`. `changes.optedOut=true` → `apTenantStrategyOptout.upsert` (create if absent, no-op if present); `changes.optedOut=false` → `apTenantStrategyOptout.deleteMany` (idempotent). `changes.reason` stored when provided.
+- **Intent parser updated**: `tenant_strategy_optout` added to `ENTITIES` in the system prompt. LLM generates `targetId=null, changes:{optedOut:boolean}` for opt-in/out requests.
+- **Chat service updated**: `handleChat` now loads `apTenantStrategyOptout` alongside the business profile. `tenantCtx.strategyOptout` included in `_buildReplyPrompt` so the LLM can answer status queries. New method: `getStrategyOptoutStatus(tenantId): Promise<{optedOut:boolean}>`.
+- **Status endpoint**: `GET /autopilot/chat/settings/strategy-optout` — returns `{ optedOut: boolean }`. Authenticated, registered in `authenticatedController` array.
+- **Frontend**: `STARTER_PROMPTS` includes "Manage data sharing settings". `describeChanges()` helper in `chat-layout.tsx` renders privacy-aware text in `ProposalBubble` when `targetEntity === 'tenant_strategy_optout'`.
 
 ### Key files added in Phase 4 — slices 4.3–4.5
 - **ApStrategyPattern model**: `schema.prisma` (`@@map("ap_strategy_pattern")`). Key fields: `platform`, `niche?`, `patternType` (enum `ApStrategyPatternType`: `POSTING_FREQUENCY | CONTENT_FORMAT | ENGAGEMENT_HOOK | HASHTAG_STRATEGY | TIMING | TONE`), `patternKey` (stable snake_case identifier for dedup), `title`, `description`, `evidenceCount` (Int default 1 — incremented on upsert), `performanceData` (Json), `active`. `@@unique([platform, patternKey])` for upsert dedup. No Organization FK — intentionally cross-tenant.
@@ -1048,6 +1055,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-20 | 4.2 | done | autopilot/skills/rollback_post.ts (handleRollback, rollbackPostSkill; atomic $transaction: soft-delete Postiz Post, mark ApPostCandidate FAILED, annotate ApPublishedPost metadata; idempotent; tenant-scoped); rollback_post.spec.ts (8 tests); skills/index.ts + skill-costs.ts updated; 310 autopilot tests green
 2026-04-20 | 4.3 | done | schema.prisma (ApStrategyPattern + ApStrategyPatternType enum + @@unique([platform,patternKey]); ApTenantStrategyOptout + @unique organizationId + Organization back-relation); db push applied; client regenerated
 2026-04-20 | 4.4+4.5 | done | autopilot/agents/analyzer.ts (runAnalyzer, analyzerAgent; loads posts+profile, generateObject for insights+patterns, writes LEARNING memories, upserts ApStrategyPattern respecting opt-out); analyzer.spec.ts (26 tests); agents/index.ts updated; 336 autopilot tests green; typecheck green
+2026-04-20 | 4.6 | done | autopilot/chat/proposals.ts (applyTenantStrategyOptout: upsert on optedOut=true, deleteMany on optedOut=false; registered at module load); agents/intent_parser.ts (tenant_strategy_optout added to ENTITIES in system prompt); chat/chat.service.ts (loads opt-out status alongside profile, strategyOptout in tenantCtx, _buildReplyPrompt includes data-sharing status, getStrategyOptoutStatus method); autopilot-chat.controller.ts (GET /autopilot/chat/settings/strategy-optout); proposals.spec.ts (6 new opt-out applier tests, 342 total green); chat-layout.tsx (Manage data sharing settings chip, describeChanges helper for opt-out proposal bubble); typecheck green
 <!-- entries end -->
 
 ---

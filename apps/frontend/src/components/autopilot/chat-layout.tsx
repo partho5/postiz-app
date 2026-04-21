@@ -342,11 +342,24 @@ const ChatBubble: FC<{ message: UserMsg | AssistantMsg }> = ({ message }) => {
 // Proposal bubble
 // ---------------------------------------------------------------------------
 
+/** Human-readable description for a proposal's changes, by entity. */
+function describeChanges(
+  targetEntity: string,
+  changes: Record<string, unknown>,
+): string {
+  if (targetEntity === 'tenant_strategy_optout') {
+    return changes.optedOut === true
+      ? 'Stop contributing anonymized strategy data to the shared pattern pool. You can still benefit from patterns contributed by others.'
+      : 'Resume contributing anonymized strategy data. Your content is never shared — only structural patterns like timing and format.';
+  }
+  return formatChanges(changes);
+}
+
 const ProposalBubble: FC<{
   message: ProposalMsg;
   onDecision: (decision: 'confirm' | 'cancel') => void;
 }> = ({ message, onDecision }) => {
-  const changesSummary = formatChanges(message.changes);
+  const changesSummary = describeChanges(message.targetEntity, message.changes);
 
   return (
     <div className="flex gap-[12px] flex-row">
@@ -402,6 +415,7 @@ const STARTER_PROMPTS = [
   'Set up my brand voice',
   'What should I post this week?',
   'Review my growth rules',
+  'Manage data sharing settings',
 ];
 
 const WelcomeState: FC<{
