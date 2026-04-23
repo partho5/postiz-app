@@ -27,6 +27,7 @@ type ProviderId = 'anthropic' | 'openai' | 'google';
 /** Maps a model ID prefix/name to the provider that serves it. */
 const MODEL_PROVIDER: Record<string, ProviderId> = {
   // Anthropic Claude
+  'claude-opus-4-7': 'anthropic',
   'claude-opus-4-6': 'anthropic',
   'claude-sonnet-4-6': 'anthropic',
   'claude-haiku-4-5': 'anthropic',
@@ -34,16 +35,18 @@ const MODEL_PROVIDER: Record<string, ProviderId> = {
   'claude-3-5-sonnet-20241022': 'anthropic',
   'claude-3-5-haiku-20241022': 'anthropic',
   // OpenAI
+  'gpt-4.1': 'openai',
+  'gpt-4.1-mini': 'openai',
+  'gpt-4.1-nano': 'openai',
   'gpt-4o': 'openai',
   'gpt-4o-mini': 'openai',
   'o3': 'openai',
-  'o3-mini': 'openai',
   'o4-mini': 'openai',
-  // Google
+  // Google (available if AP_GOOGLE_API_KEY is set)
+  'gemini-2.5-pro': 'google',
   'gemini-2.0-flash': 'google',
   'gemini-1.5-pro': 'google',
   'gemini-1.5-flash': 'google',
-  'gemini-2.5-pro': 'google',
 };
 
 /** Maps a provider to the env var name that holds the API key. */
@@ -59,8 +62,9 @@ const PROVIDER_ENV: Record<ProviderId, string> = {
  */
 export const DEFAULT_MODEL_PREFERENCE: string[] = [
   'claude-sonnet-4-6',
+  'claude-opus-4-7',
+  'gpt-4.1',
   'gpt-4o',
-  'gemini-2.0-flash',
 ];
 
 // ---------------------------------------------------------------------------

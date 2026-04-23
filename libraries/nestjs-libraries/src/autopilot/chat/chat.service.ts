@@ -51,6 +51,10 @@ import {
   type ConfirmResult,
 } from './proposals';
 import { getStructuredProfile } from '../memory';
+import {
+  DirectActionHandler,
+  type ChatDraftPreviewEvent,
+} from './direct_action_handler';
 
 // ---------------------------------------------------------------------------
 // Stream event types
@@ -80,9 +84,14 @@ export type ChatDoneEvent = {
 /** Emitted when an unrecoverable error occurs. */
 export type ChatErrorEvent = { type: 'error'; message: string };
 
+/** Transient processing status shown while content is still loading. */
+export type ChatStatusEvent = { type: 'status'; message: string };
+
 export type ChatStreamEvent =
   | ChatTextEvent
   | ChatProposalEvent
+  | ChatDraftPreviewEvent
+  | ChatStatusEvent
   | ChatDoneEvent
   | ChatErrorEvent;
 
@@ -103,7 +112,10 @@ export interface ChatIngressInput {
 export class AutopilotChatService {
   private readonly logger = new Logger(AutopilotChatService.name);
 
-  constructor(private readonly _prisma: PrismaService) {}
+  constructor(
+    private readonly _prisma: PrismaService,
+    private readonly _directAction: DirectActionHandler,
+  ) {}
 
   /**
    * Process one user chat message end-to-end.
@@ -239,67 +251,130 @@ export class AutopilotChatService {
       }
     } else {
       // --- Normal flow ---
-      // Step 4: Parse intent.
-      let intentResult: Awaited<ReturnType<typeof parseIntent>>;
-      try {
-        intentResult = await parseIntent(input.content, llm, tenantCtx);
-      } catch (err) {
-        const msg = `Intent parsing failed: ${err instanceof Error ? err.message : String(err)}`;
-        this.logger.error(msg, err);
-        emit({ type: 'error', message: msg });
-        return;
+
+      emit({ type: 'status', message: 'Thinking…' });
+
+      // Always parse intent first — the result is needed to decide whether
+      // to continue a pending action or abort it.
+      // parseIntent never throws; on schema failure it returns { intent: 'unclear' }.
+      const recentForIntent = await this._loadRecentMessages(org.id, 6);
+      const intentResult = await parseIntent(input.content, llm, tenantCtx, recentForIntent);
+
+      // Check for an in-progress direct action.
+      const pendingAction = await this._prisma.apPendingAction.findUnique({
+        where: { organizationId: org.id },
+      });
+
+      const hasPending = !!(pendingAction && pendingAction.expiresAt > new Date());
+
+      // Decide whether to abort the pending action.
+      // Abort when:  (a) user explicitly cancels, or (b) user starts a brand-new post request.
+      const wantsAbort = hasPending && (
+        this._isCancellationMessage(input.content) ||
+        intentResult.intent === 'direct_action'
+      );
+
+      if (wantsAbort) {
+        await this._directAction.cancelAction(org.id);
       }
 
-      // Step 5: Generate response based on intent.
-      if (intentResult.intent === 'config_change_request' && intentResult.draft) {
-        // 5a — Proposal path.
-        const draft = intentResult.draft;
-        const proposalId = await createProposal(
-          this._prisma,
-          org.id,
-          {
-            targetEntity: draft.targetEntity,
-            targetId: draft.targetId,
-            changes: draft.changes,
-            rationale: draft.rationale,
-          },
-          userMsg.id,
-        );
-
-        assistantContent = draft.rationale;
-        emit({
-          type: 'proposal',
-          proposalId,
-          rationale: draft.rationale,
-          targetEntity: draft.targetEntity,
-          changes: draft.changes,
-        });
-      } else {
-        // 5b — Streamed text response.
-        let fullText = '';
+      if (hasPending && !wantsAbort) {
+        // User is answering a follow-up question — continue the pending flow.
         try {
-          const { textStream } = streamText({
-            model: llm.model,
-            prompt: input.content,
-            system: this._buildReplyPrompt(intentResult.intent, tenantCtx),
-          });
-
-          for await (const chunk of textStream) {
-            fullText += chunk;
-            emit({ type: 'text', chunk });
-          }
+          assistantContent = await this._directAction.continuePending(
+            org,
+            pendingAction!.id,
+            pendingAction!.waitingFor,
+            pendingAction!.collectedData,
+            input.content,
+            llm,
+            emit,
+          );
         } catch (err) {
-          const msg = `Text generation failed: ${err instanceof Error ? err.message : String(err)}`;
+          const msg = `Direct action failed: ${err instanceof Error ? err.message : String(err)}`;
           this.logger.error(msg, err);
           emit({ type: 'error', message: msg });
           return;
         }
+      } else {
+        // Step 5: Generate response based on (possibly fresh) intent.
+        if (intentResult.intent === 'direct_action') {
+          // 5a — Direct action (post creation) flow.
+          try {
+            assistantContent = await this._directAction.startFlow(
+              org,
+              user,
+              intentResult.directAction ?? {},
+              llm,
+              emit,
+            );
+          } catch (err) {
+            const msg = `Direct action failed: ${err instanceof Error ? err.message : String(err)}`;
+            this.logger.error(msg, err);
+            emit({ type: 'error', message: msg });
+            return;
+          }
+        } else if (wantsAbort) {
+          // User cancelled a pending action with no new command — confirm and idle.
+          assistantContent = "Cancelled.";
+          emit({ type: 'text', chunk: assistantContent });
+        } else if (intentResult.intent === 'config_change_request' && intentResult.draft) {
+          // 5b — Proposal path.
+          const draft = intentResult.draft;
+          const proposalId = await createProposal(
+            this._prisma,
+            org.id,
+            {
+              targetEntity: draft.targetEntity,
+              targetId: draft.targetId,
+              changes: draft.changes,
+              rationale: draft.rationale,
+            },
+            userMsg.id,
+          );
 
-        assistantContent = fullText;
+          assistantContent = draft.rationale;
+          emit({
+            type: 'proposal',
+            proposalId,
+            rationale: draft.rationale,
+            targetEntity: draft.targetEntity,
+            changes: draft.changes,
+          });
+        } else {
+          // 5c — Streamed text response.
+          let fullText = '';
+          try {
+            // Load recent history (includes the just-persisted user message at the end).
+            const recentMessages = await this._loadRecentMessages(org.id);
+            const { textStream } = streamText({
+              model: llm.model,
+              messages: recentMessages,
+              system: this._buildReplyPrompt(intentResult.intent, tenantCtx),
+            });
+
+            for await (const chunk of textStream) {
+              fullText += chunk;
+              emit({ type: 'text', chunk });
+            }
+          } catch (err) {
+            const msg = `Text generation failed: ${err instanceof Error ? err.message : String(err)}`;
+            this.logger.error(msg, err);
+            emit({ type: 'error', message: msg });
+            return;
+          }
+
+          assistantContent = fullText;
+        }
       }
     }
 
-    // Step 6: Persist assistant message.
+    // Step 6: Persist assistant message — skip empty-content rows (draft previews
+    // emit a card event; there is no text to store in history).
+    if (!assistantContent) {
+      emit({ type: 'done', assistantMessageId: '' });
+      return;
+    }
     const assistantMsg = await this._prisma.apChatMessage.create({
       data: {
         organizationId: org.id,
@@ -317,6 +392,16 @@ export class AutopilotChatService {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  /**
+   * Returns true when the message is an explicit cancellation or reset command.
+   * Keyword-based — no LLM call needed.
+   */
+  private _isCancellationMessage(message: string): boolean {
+    return /\b(cancel|abort|stop|forget it|nevermind|never mind|start over|reset|quit|exit|drop it|discard|nope|no thanks)\b/i.test(
+      message,
+    );
+  }
+
   private _mapSource(source: 'web' | 'telegram' | 'api'): ApChatMessageSource {
     switch (source) {
       case 'telegram':
@@ -333,23 +418,78 @@ export class AutopilotChatService {
     tenantCtx?: { niche?: string; goals?: unknown; strategyOptout?: boolean },
   ): string {
     const lines = [
-      'You are a helpful assistant for a social-media autopilot platform.',
+      'You are a sharp, experienced social media manager — direct, no fluff.',
+      'Tone: confident and brief. No filler phrases like "Great question!", "Certainly!", "Of course!", "I\'d be happy to", or "What else can I help you with?".',
+      'Answer the question. If you need to ask something, ask it in one short sentence.',
     ];
     if (tenantCtx?.niche) {
-      lines.push(`The user's business niche is: ${tenantCtx.niche}.`);
+      lines.push(`Business niche: ${tenantCtx.niche}.`);
     }
     if (tenantCtx?.strategyOptout !== undefined) {
       const status = tenantCtx.strategyOptout ? 'opted out' : 'opted in';
-      lines.push(
-        `Data sharing: the user is currently ${status} of contributing anonymized strategy patterns.` +
-          ` Reading cross-tenant patterns is always enabled regardless of this setting.`,
-      );
+      lines.push(`Data sharing: ${status} of contributing anonymized strategy patterns.`);
     }
-    lines.push(`Detected intent: ${intent}.`);
-    lines.push(
-      'Reply concisely and helpfully. Do not reveal internal intent classification details to the user.',
-    );
+    lines.push(`Intent: ${intent}.`);
     return lines.join('\n');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Recent messages for LLM context
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Load the most recent USER/ASSISTANT messages for a tenant, oldest-first,
+   * suitable for passing as the `messages` array to streamText.
+   */
+  private async _loadRecentMessages(
+    tenantId: string,
+    limit = 20,
+  ): Promise<{ role: 'user' | 'assistant'; content: string }[]> {
+    const rows = await this._prisma.apChatMessage.findMany({
+      where: {
+        organizationId: tenantId,
+        role: { in: [ApChatMessageRole.USER, ApChatMessageRole.ASSISTANT] },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: { role: true, content: true },
+    });
+    return rows.reverse().map((r) => ({
+      role: r.role === ApChatMessageRole.USER ? 'user' : 'assistant',
+      content: r.content,
+    }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chat history loader
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Return the most recent chat messages for a tenant, oldest-first.
+   * Only USER and ASSISTANT roles are included (proposals are ephemeral).
+   */
+  async getHistory(
+    tenantId: string,
+    limit = 100,
+  ): Promise<{ messages: { id: string; role: string; content: string; createdAt: string }[] }> {
+    const rows = await this._prisma.apChatMessage.findMany({
+      where: {
+        organizationId: tenantId,
+        role: { in: [ApChatMessageRole.USER, ApChatMessageRole.ASSISTANT] },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      select: { id: true, role: true, content: true, createdAt: true },
+    });
+
+    return {
+      messages: rows.map((r) => ({
+        id: r.id,
+        role: r.role === ApChatMessageRole.USER ? 'user' : 'assistant',
+        content: r.content,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -434,5 +574,39 @@ export class AutopilotChatService {
     });
     if (!row) return;
     await cancel(this._prisma, proposalId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Direct-action post confirm / cancel
+  // ---------------------------------------------------------------------------
+
+  async confirmPost(
+    pendingActionId: string,
+    tenantId: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const result = await this._directAction.confirmApproval(tenantId, pendingActionId);
+    if (result.ok) {
+      await this._prisma.apChatMessage.create({
+        data: {
+          organizationId: tenantId,
+          role: ApChatMessageRole.ASSISTANT,
+          content: result.message,
+          source: ApChatMessageSource.WEB,
+        },
+      });
+    }
+    return result;
+  }
+
+  async cancelPost(tenantId: string): Promise<void> {
+    await this._directAction.cancelAction(tenantId);
+    await this._prisma.apChatMessage.create({
+      data: {
+        organizationId: tenantId,
+        role: ApChatMessageRole.ASSISTANT,
+        content: 'Cancelled.',
+        source: ApChatMessageSource.WEB,
+      },
+    });
   }
 }

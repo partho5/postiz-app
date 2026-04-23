@@ -62,6 +62,7 @@ const onboardingDecisionSchema = z.object({
         .describe('Business or growth goals'),
       brandVoiceShort: z
         .string()
+        .optional()
         .describe('Short brand voice description (1-2 sentences)'),
       brandVoiceExtended: z
         .string()
@@ -120,17 +121,27 @@ export async function analyzeOnboarding(
     ? `Conversation so far:\n${conversationLines.join('\n')}\n\nLatest user message:\n${latestMessage}`
     : `This is the user's first message:\n${latestMessage}`;
 
-  const { object } = await generateObject({
-    model,
-    schema: onboardingDecisionSchema,
-    prompt,
-    system: DECISION_SYSTEM_PROMPT,
-  });
+  let object: z.infer<typeof onboardingDecisionSchema>;
+  try {
+    ({ object } = await generateObject({
+      model,
+      schema: onboardingDecisionSchema,
+      prompt,
+      system: DECISION_SYSTEM_PROMPT,
+    }));
+  } catch {
+    // If the model returns a response that doesn't match the schema, fall back
+    // to asking the first missing topic rather than surfacing a crash.
+    return { action: 'ask', topic: 'niche' };
+  }
 
   if (object.ready && object.profile) {
     const { niche, goals, brandVoiceShort, brandVoiceExtended } =
       object.profile;
 
+    const voiceDesc = brandVoiceShort
+      ? ` with a "${brandVoiceShort}" brand voice`
+      : '';
     return {
       action: 'propose',
       draft: {
@@ -139,10 +150,10 @@ export async function analyzeOnboarding(
         changes: {
           niche,
           goals,
-          brandVoiceShort,
+          ...(brandVoiceShort ? { brandVoiceShort } : {}),
           ...(brandVoiceExtended ? { brandVoiceExtended } : {}),
         },
-        rationale: `Based on our conversation, I've put together your business profile: you're in the "${niche}" space with a "${brandVoiceShort}" brand voice.`,
+        rationale: `Based on our conversation, I've put together your business profile: you're in the "${niche}" space${voiceDesc}.`,
       },
     };
   }
@@ -180,17 +191,15 @@ export function buildOnboardingReplyPrompt(
     topicDescriptions[topic] ?? `their ${topic.replace(/_/g, ' ')}`;
 
   return `\
-You are a friendly AI assistant helping a new user set up their social media autopilot.
-${hasHistory ? 'Continue the onboarding conversation naturally.' : 'This is the start of the conversation. Welcome the user warmly and briefly.'}
+You are a sharp social media manager helping someone set up their autopilot.
+${hasHistory ? '' : 'First message — keep it brief, skip the welcome speech.'}
+Find out about ${topicDesc}.
 
-Your next goal is to learn about ${topicDesc}.
-
-Guidelines:
-- Be concise and conversational (2-3 sentences max).
-- Ask ONE focused question at a time.
-- Acknowledge what the user has already shared before asking the next question.
-- Do not list all the questions you plan to ask.
-- Do not reveal internal topic names or onboarding steps.`;
+Rules:
+- One question, max two sentences.
+- No filler: no "Great!", "Sure!", "Certainly!", "I'd be happy to", "What else can I help you with?".
+- Acknowledge what they said, then ask the next thing.
+- Never list your steps or mention the word "onboarding".`;
 }
 
 // ---------------------------------------------------------------------------

@@ -76,7 +76,7 @@ export const CardSelect: FC<CardSelectProps> = ({
             >
               <span
                 className={`block text-[14px] font-[500] leading-[1.4] ${
-                  isSelected ? 'text-textItemFocused' : 'text-newTextColor group-hover:text-textItemFocused'
+                  isSelected ? 'text-textItemFocused' : 'text-newTextColor'
                 }`}
               >
                 {opt.label}
@@ -84,7 +84,7 @@ export const CardSelect: FC<CardSelectProps> = ({
               {opt.description && (
                 <span
                   className={`block text-[12px] leading-[1.5] mt-[3px] ${
-                    isSelected ? 'text-textItemFocused opacity-80' : 'text-textItemBlur'
+                    isSelected ? 'text-textItemFocused opacity-80' : 'text-textItemBlur group-hover:text-newTextColor'
                   }`}
                 >
                   {opt.description}

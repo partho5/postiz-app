@@ -12,6 +12,7 @@ import { generateObject } from 'ai-v5';
 import { z } from 'zod';
 import type { AgentDefinition } from './types';
 import type { LlmProvider } from '../skills/types';
+import { selectModel, DEFAULT_MODEL_PREFERENCE } from '../llm';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,10 +40,22 @@ export interface DraftProposal {
   rationale: string;
 }
 
+export interface DirectActionData {
+  topic?: string;
+  content?: string;
+  platforms?: string[];
+  publishImmediately?: boolean;
+  scheduleAt?: string;
+  countPerPlatform?: number;
+  wantsImage?: boolean;
+}
+
 export interface IntentResult {
   intent: IntentClass;
   /** Only present when intent === 'config_change_request'. */
   draft?: DraftProposal;
+  /** Only present when intent === 'direct_action'. */
+  directAction?: DirectActionData;
 }
 
 export interface IntentParserInput {
@@ -66,14 +79,26 @@ const intentResultSchema = z
       'small_talk',
       'unclear',
     ]),
-    /**
-     * Only populated by the LLM when intent = 'config_change_request'.
-     * All fields optional so non-config intents don't need to emit them.
-     */
+    // ── config_change_request fields ──────────────────────────────────────
     targetEntity: z.string().optional(),
     targetId: z.string().nullable().optional(),
     changes: z.record(z.unknown()).optional(),
     rationale: z.string().optional(),
+    // ── direct_action fields ──────────────────────────────────────────────
+    /** What the post should be about; paraphrase from the conversation. */
+    topic: z.string().optional(),
+    /** Verbatim content if the user provided exact text to post. */
+    content: z.string().optional(),
+    /** Target platform names (e.g. ["facebook","linkedin"]). Omit if not specified. */
+    platforms: z.array(z.string()).optional(),
+    /** True when the user says "now", "immediately", "right now". */
+    publishImmediately: z.boolean().optional(),
+    /** Specific time the user gave (ISO 8601 or natural phrase like "tomorrow 3pm"). */
+    scheduleAt: z.string().optional(),
+    /** Number of posts to generate per platform. Default 1. */
+    countPerPlatform: z.number().int().optional(),
+    /** True if user explicitly asked for an image. Omit if not mentioned. */
+    wantsImage: z.boolean().optional(),
   })
   .describe('Intent classification result');
 
@@ -92,6 +117,7 @@ const INTENT_CLASSES = [
 const ENTITIES = [
   'business_profile        — fields: niche, goals, brandVoiceShort, brandVoiceExtended, antiPatterns, regulatoryFlags',
   'growth_rule             — fields: ruleKey, ruleValue, active',
+  'cadence_config          — fields: postsPerDay, preferredTimes (array of HH:MM), timezone, active, pausedUntil. targetId = platform name (e.g. "linkedin") or null for global.',
   'tenant_strategy_optout  — field: optedOut (boolean). true = stop contributing anonymized strategy data; false = resume contributing. Singleton (targetId = null).',
 ].join('\n    ');
 
@@ -99,17 +125,26 @@ const BASE_SYSTEM_PROMPT = `\
 You are an intent-classification assistant for a social-media autopilot product.
 
 Given a user message, output a JSON object with:
-  intent: one of —
+  intent: one of:
   ${INTENT_CLASSES}
 
-For intent = "config_change_request" ALSO include:
-  targetEntity — the entity to mutate, one of:
-    ${ENTITIES}
-  targetId     — id of the existing record, or null (create / singleton)
-  changes      — object whose keys are field names and values are the new values
-  rationale    — one sentence explaining why this change is proposed
+For intent = "direct_action" ALSO include any fields that are discernible:
+  topic              - what the post should be about (paraphrase from the message)
+  content            - verbatim post text if the user provided exact wording
+  platforms          - array of platform names the user mentioned (e.g. ["facebook","linkedin"])
+  publishImmediately - true if the user says "now", "immediately", "right now"
+  scheduleAt         - specific time the user gave (ISO 8601 or natural phrase like "tomorrow 3pm")
+  countPerPlatform   - number of posts to generate per platform (default 1)
+  wantsImage         - true only if the user explicitly asked for an image
 
-For all other intents omit targetEntity, targetId, changes, and rationale.
+For intent = "config_change_request" ALSO include:
+  targetEntity - the entity to mutate, one of:
+    ${ENTITIES}
+  targetId     - id of the existing record, or null (create or singleton)
+  changes      - object whose keys are field names and values are the new values
+  rationale    - one sentence in first person speaking directly to the user, describing what you are about to change and why. Example: "I'll set your posting frequency to daily to help grow your engagement." Do NOT refer to "the user" in third person.
+
+Omit fields that do not apply to the detected intent.
 Respond ONLY with the JSON object — no prose.`;
 
 function buildSystemPrompt(
@@ -144,13 +179,53 @@ export async function parseIntent(
   message: string,
   llm: LlmProvider,
   tenantContext?: { niche?: string; goals?: unknown },
+  recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>,
 ): Promise<IntentResult> {
-  const { object } = await generateObject({
-    model: llm.model,
-    schema: intentResultSchema,
-    prompt: message,
-    system: buildSystemPrompt(tenantContext),
-  });
+  // Build classification prompt: include last 3 turns for context so the
+  // classifier understands references like "as per the prompt earlier".
+  const historyPrefix =
+    recentHistory && recentHistory.length > 0
+      ? recentHistory
+          .slice(-3)
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 400)}`)
+          .join('\n') + '\n---\n'
+      : '';
+
+  const classificationPrompt = historyPrefix
+    ? `${historyPrefix}User (latest): ${message}`
+    : message;
+
+  const system = buildSystemPrompt(tenantContext);
+
+  // Try primary model first, then fall back through alternative available models.
+  // This handles cases where the primary model fails structured output on complex input.
+  const modelsToTry = [
+    llm.model,
+    ...DEFAULT_MODEL_PREFERENCE
+      .filter((id) => id !== (llm.model as { modelId?: string }).modelId)
+      .map((id) => selectModel([id]))
+      .filter((m): m is NonNullable<typeof m> => m !== null),
+  ];
+
+  let object: z.infer<typeof intentResultSchema> | null = null;
+  for (const model of modelsToTry) {
+    try {
+      ({ object } = await generateObject({
+        model,
+        schema: intentResultSchema,
+        prompt: classificationPrompt,
+        system,
+      }));
+      break;
+    } catch {
+      // Try next model.
+    }
+  }
+
+  if (!object) {
+    // All models failed — fall back to 'unclear' so the caller streams a normal text response.
+    return { intent: 'unclear' };
+  }
 
   const result: IntentResult = { intent: object.intent };
 
@@ -160,6 +235,18 @@ export async function parseIntent(
       targetId: object.targetId ?? null,
       changes: (object.changes as Record<string, unknown>) ?? {},
       rationale: object.rationale ?? '',
+    };
+  }
+
+  if (object.intent === 'direct_action') {
+    result.directAction = {
+      topic: object.topic,
+      content: object.content,
+      platforms: object.platforms,
+      publishImmediately: object.publishImmediately,
+      scheduleAt: object.scheduleAt,
+      countPerPlatform: object.countPerPlatform,
+      wantsImage: object.wantsImage,
     };
   }
 

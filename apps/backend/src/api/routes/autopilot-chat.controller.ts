@@ -99,6 +99,19 @@ export class AutopilotChatController {
   }
 
   /**
+   * GET /autopilot/chat/history
+   * Return recent chat messages (user + assistant) for the tenant.
+   * Response: { messages: Array<{ id, role, content, createdAt }> }
+   */
+  @Get('/chat/history')
+  @HttpCode(200)
+  async getChatHistory(
+    @GetOrgFromRequest() org: Organization,
+  ): Promise<{ messages: { id: string; role: string; content: string; createdAt: string }[] }> {
+    return this._chatService.getHistory(org.id);
+  }
+
+  /**
    * GET /autopilot/chat/settings/strategy-optout
    * Return the tenant's current strategy-pattern contribution opt-out status.
    * Response: { optedOut: boolean }
@@ -109,5 +122,31 @@ export class AutopilotChatController {
     @GetOrgFromRequest() org: Organization,
   ): Promise<{ optedOut: boolean }> {
     return this._chatService.getStrategyOptoutStatus(org.id);
+  }
+
+  /**
+   * PATCH /autopilot/chat/pending-actions/:id/confirm
+   * Approve a draft post — queues it for publishing.
+   * Response: { ok: boolean, message: string }
+   */
+  @Patch('/chat/pending-actions/:id/confirm')
+  @HttpCode(200)
+  async confirmPost(
+    @Param('id') id: string,
+    @GetOrgFromRequest() org: Organization,
+  ): Promise<{ ok: boolean; message: string }> {
+    return this._chatService.confirmPost(id, org.id);
+  }
+
+  /**
+   * PATCH /autopilot/chat/pending-actions/cancel
+   * Cancel whatever pending post action is active for the tenant.
+   */
+  @Patch('/chat/pending-actions/cancel')
+  @HttpCode(204)
+  async cancelPost(
+    @GetOrgFromRequest() org: Organization,
+  ): Promise<void> {
+    await this._chatService.cancelPost(org.id);
   }
 }

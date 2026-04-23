@@ -61,6 +61,7 @@ model Organization {
   apScheduledSlot         ApScheduledSlot[]
   apPublishedPost         ApPublishedPost[]
   apTenantStrategyOptout  ApTenantStrategyOptout?
+  apPendingAction         ApPendingAction?
 }
 
 model Tags {
@@ -1222,4 +1223,19 @@ model ApTenantStrategyOptout {
   reason         String?
 
   @@map("ap_tenant_strategy_optout")
+}
+
+// ─── Pending multi-turn direct action ────────────────────────────────────────
+
+model ApPendingAction {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  actionType     String       @default("post")
+  collectedData  Json         @default("{}")
+  waitingFor     String
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+
+  @@map("ap_pending_action")
 }

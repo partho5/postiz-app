@@ -10,6 +10,8 @@ import React, {
 } from 'react';
 import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
 import { CardSelect } from './card-select';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // ---------------------------------------------------------------------------
 // Message types
@@ -26,6 +28,7 @@ type AssistantMsg = {
   role: 'assistant';
   content: string;
   streaming?: boolean;
+  statusMessage?: string;
 };
 
 type ProposalMsg = {
@@ -38,13 +41,25 @@ type ProposalMsg = {
   decided: boolean;
 };
 
+type DraftPreviewMsg = {
+  id: string;
+  role: 'draft_preview';
+  pendingActionId: string;
+  drafts: Array<{ platform: string; content: string; hashtags?: string[] }>;
+  imageUrl?: string;
+  publishAt: string;
+  decided: boolean;
+  confirmStatus?: 'loading' | 'done';
+  confirmMessage?: string;
+};
+
 type ErrorMsg = {
   id: string;
   role: 'error';
   content: string;
 };
 
-type Message = UserMsg | AssistantMsg | ProposalMsg | ErrorMsg;
+type Message = UserMsg | AssistantMsg | ProposalMsg | DraftPreviewMsg | ErrorMsg;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,7 +84,40 @@ export const AutopilotChatLayout: FC = () => {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fetch = useFetch();
+
+  // Load history on mount.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/autopilot/chat/history');
+        if (!res.ok) return;
+        const data = await res.json();
+        setMessages(
+          (data.messages as { id: string; role: 'user' | 'assistant'; content: string }[]).map(
+            (m) =>
+              m.role === 'user'
+                ? ({ id: m.id, role: 'user', content: m.content } as UserMsg)
+                : ({ id: m.id, role: 'assistant', content: m.content, streaming: false } as AssistantMsg),
+          ),
+        );
+      } catch {
+        // non-fatal
+      }
+    })();
+  }, []);
+
+  // Auto-focus textarea on mount and after each response.
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!sending) {
+      textareaRef.current?.focus();
+    }
+  }, [sending]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -105,7 +153,7 @@ export const AutopilotChatLayout: FC = () => {
         const decoder = new TextDecoder();
         let buffer = '';
         let assistantText = '';
-        let proposalEmitted = false;
+        let specialEmitted = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -125,13 +173,24 @@ export const AutopilotChatLayout: FC = () => {
             }
 
             switch (event.type) {
+              case 'status': {
+                setMessages((prev) =>
+                  prev.map((m): Message =>
+                    m.id === assistantMsgId && m.role === 'assistant'
+                      ? { ...m, statusMessage: event.message as string }
+                      : m
+                  )
+                );
+                break;
+              }
+
               case 'text': {
                 assistantText += event.chunk as string;
                 const partial = assistantText;
                 setMessages((prev) =>
                   prev.map((m): Message =>
                     m.id === assistantMsgId && m.role === 'assistant'
-                      ? { ...m, content: partial, streaming: true }
+                      ? { ...m, content: partial, statusMessage: undefined, streaming: true }
                       : m
                   )
                 );
@@ -139,7 +198,7 @@ export const AutopilotChatLayout: FC = () => {
               }
 
               case 'proposal': {
-                proposalEmitted = true;
+                specialEmitted = true;
                 const proposalMsgId = makeId();
                 setMessages((prev) =>
                   prev
@@ -157,8 +216,27 @@ export const AutopilotChatLayout: FC = () => {
                 break;
               }
 
+              case 'draft_preview': {
+                specialEmitted = true;
+                const draftMsgId = makeId();
+                setMessages((prev) =>
+                  prev
+                    .filter((m) => m.id !== assistantMsgId)
+                    .concat({
+                      id: draftMsgId,
+                      role: 'draft_preview',
+                      pendingActionId: event.pendingActionId as string,
+                      drafts: event.drafts as DraftPreviewMsg['drafts'],
+                      imageUrl: event.imageUrl as string | undefined,
+                      publishAt: event.publishAt as string,
+                      decided: false,
+                    } as DraftPreviewMsg)
+                );
+                break;
+              }
+
               case 'done': {
-                if (!proposalEmitted) {
+                if (!specialEmitted) {
                   setMessages((prev) =>
                     prev.map((m): Message =>
                       m.id === assistantMsgId && m.role === 'assistant'
@@ -227,6 +305,50 @@ export const AutopilotChatLayout: FC = () => {
     [fetch]
   );
 
+  const handleDraftDecision = useCallback(
+    async (pendingActionId: string, msgId: string, decision: 'confirm' | 'cancel') => {
+      const loadingMsg = decision === 'confirm' ? 'Publishing…' : 'Cancelling…';
+      setMessages((prev) =>
+        prev.map((m): Message =>
+          m.id === msgId && m.role === 'draft_preview'
+            ? { ...m, decided: true, confirmStatus: 'loading', confirmMessage: loadingMsg }
+            : m
+        )
+      );
+      try {
+        let resultMessage = decision === 'confirm' ? 'Queued.' : 'Cancelled.';
+        if (decision === 'confirm') {
+          const res = await fetch(`/autopilot/chat/pending-actions/${pendingActionId}/confirm`, {
+            method: 'PATCH',
+          });
+          if (res.ok) {
+            const data = await res.json();
+            resultMessage = data.message ?? 'Queued.';
+          }
+        } else {
+          await fetch('/autopilot/chat/pending-actions/cancel', { method: 'PATCH' });
+          resultMessage = 'Cancelled.';
+        }
+        setMessages((prev) =>
+          prev.map((m): Message =>
+            m.id === msgId && m.role === 'draft_preview'
+              ? { ...m, confirmStatus: 'done', confirmMessage: resultMessage }
+              : m
+          )
+        );
+      } catch {
+        setMessages((prev) =>
+          prev.map((m): Message =>
+            m.id === msgId && m.role === 'draft_preview'
+              ? { ...m, confirmStatus: 'done', confirmMessage: 'Something went wrong.' }
+              : m
+          )
+        );
+      }
+    },
+    [fetch]
+  );
+
   return (
     <div className="flex flex-col flex-1 h-full overflow-hidden">
       {/* Messages area */}
@@ -239,6 +361,7 @@ export const AutopilotChatLayout: FC = () => {
               key={msg.id}
               message={msg}
               onProposalDecision={handleProposalDecision}
+              onDraftDecision={handleDraftDecision}
             />
           ))
         )}
@@ -247,12 +370,13 @@ export const AutopilotChatLayout: FC = () => {
 
       {/* Input area */}
       <div className="p-[16px] border-t border-newBgLineColor">
-        <div className="flex gap-[12px] items-end bg-newBgLineColor rounded-[12px] p-[12px]">
+        <div className="flex gap-[12px] items-end bg-newBgColorInner rounded-[12px] p-[12px] border border-newBgLineColor focus-within:border-textItemBlur transition-colors">
           <textarea
-            className="flex-1 bg-transparent resize-none outline-none text-newTextColor placeholder:text-textItemBlur text-[14px] leading-[1.5] max-h-[120px] min-h-[24px]"
+            ref={textareaRef}
+            className="flex-1 bg-transparent resize-none outline-none text-newTextColor placeholder:text-textItemBlur text-[14px] leading-[1.5] max-h-[160px] min-h-[60px]"
             placeholder="Message your autopilot…"
             value={input}
-            rows={1}
+            rows={3}
             disabled={sending}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -285,7 +409,12 @@ const MessageRow: FC<{
     msgId: string,
     decision: 'confirm' | 'cancel'
   ) => void;
-}> = ({ message, onProposalDecision }) => {
+  onDraftDecision: (
+    pendingActionId: string,
+    msgId: string,
+    decision: 'confirm' | 'cancel'
+  ) => void;
+}> = ({ message, onProposalDecision, onDraftDecision }) => {
   if (message.role === 'user' || message.role === 'assistant') {
     return <ChatBubble message={message} />;
   }
@@ -294,6 +423,14 @@ const MessageRow: FC<{
       <ProposalBubble
         message={message}
         onDecision={(d) => onProposalDecision(message.proposalId, message.id, d)}
+      />
+    );
+  }
+  if (message.role === 'draft_preview') {
+    return (
+      <DraftPreviewBubble
+        message={message}
+        onDecision={(d) => onDraftDecision(message.pendingActionId, message.id, d)}
       />
     );
   }
@@ -306,7 +443,9 @@ const MessageRow: FC<{
 
 const ChatBubble: FC<{ message: UserMsg | AssistantMsg }> = ({ message }) => {
   const isUser = message.role === 'user';
-  const isStreaming = !isUser && (message as AssistantMsg).streaming;
+  const assistantMsg = !isUser ? (message as AssistantMsg) : null;
+  const isStreaming = !!assistantMsg?.streaming;
+  const statusMessage = assistantMsg?.statusMessage;
   const isEmpty = message.content === '';
 
   return (
@@ -317,17 +456,23 @@ const ChatBubble: FC<{ message: UserMsg | AssistantMsg }> = ({ message }) => {
         </div>
       )}
       <div
-        className={`max-w-[70%] px-[14px] py-[10px] rounded-[12px] text-[14px] leading-[1.6] whitespace-pre-wrap ${
+        className={`max-w-[70%] px-[14px] py-[10px] rounded-[12px] text-[14px] leading-[1.6] ${
           isUser
-            ? 'bg-boxFocused text-textItemFocused rounded-tr-[4px]'
+            ? 'bg-boxFocused text-textItemFocused rounded-tr-[4px] whitespace-pre-wrap'
             : 'bg-newBgLineColor text-newTextColor rounded-tl-[4px]'
         }`}
       >
         {isStreaming && isEmpty ? (
-          <TypingDots />
+          statusMessage ? (
+            <span className="text-textItemBlur text-[13px] animate-pulse">{statusMessage}</span>
+          ) : (
+            <TypingDots />
+          )
+        ) : isUser ? (
+          message.content
         ) : (
           <>
-            {message.content}
+            <MarkdownContent content={message.content} />
             {isStreaming && (
               <span className="inline-block w-[2px] h-[14px] ml-[2px] bg-current animate-pulse align-text-bottom" />
             )}
@@ -342,16 +487,44 @@ const ChatBubble: FC<{ message: UserMsg | AssistantMsg }> = ({ message }) => {
 // Proposal bubble
 // ---------------------------------------------------------------------------
 
-/** Human-readable description for a proposal's changes, by entity. */
+/** Human-readable summary for a proposal's changes, by entity. */
 function describeChanges(
   targetEntity: string,
   changes: Record<string, unknown>,
 ): string {
   if (targetEntity === 'tenant_strategy_optout') {
     return changes.optedOut === true
-      ? 'Stop contributing anonymized strategy data to the shared pattern pool. You can still benefit from patterns contributed by others.'
-      : 'Resume contributing anonymized strategy data. Your content is never shared — only structural patterns like timing and format.';
+      ? "I'll stop sharing your anonymized strategy data with the pool. You can still read patterns from others."
+      : "I'll resume contributing your anonymized strategy data. Your content is never shared — only structural patterns like timing and format.";
   }
+
+  if (targetEntity === 'growth_rule') {
+    const { ruleKey, ruleValue, active } = changes as {
+      ruleKey?: string;
+      ruleValue?: unknown;
+      active?: boolean;
+    };
+    if (active === false) return "I'll turn this rule off.";
+    const friendlyKeys: Record<string, string> = {
+      posting_frequency: 'Posting frequency',
+      best_time_to_post: 'Best time to post',
+      content_mix: 'Content mix',
+      hashtag_strategy: 'Hashtag strategy',
+      engagement_target: 'Engagement target',
+    };
+    const label = ruleKey ? (friendlyKeys[ruleKey] ?? ruleKey.replace(/_/g, ' ')) : 'Rule';
+    return ruleValue !== undefined ? `${label} → ${ruleValue}` : label;
+  }
+
+  if (targetEntity === 'business_profile') {
+    const parts: string[] = [];
+    if (changes.niche) parts.push(`Niche: ${changes.niche}`);
+    if (Array.isArray(changes.goals) && (changes.goals as unknown[]).length)
+      parts.push(`Goals: ${(changes.goals as string[]).join(', ')}`);
+    if (changes.brandVoiceShort) parts.push(`Brand voice: ${changes.brandVoiceShort}`);
+    if (parts.length) return parts.join(' · ');
+  }
+
   return formatChanges(changes);
 }
 
@@ -371,20 +544,108 @@ const ProposalBubble: FC<{
           {message.rationale}
         </div>
         <CardSelect
-          title="Apply this change?"
           disabled={message.decided}
           options={[
             {
               id: 'confirm',
-              label: 'Apply changes',
+              label: 'Yes, do it',
               ...(changesSummary ? { description: changesSummary } : {}),
             },
-            { id: 'cancel', label: 'Dismiss' },
+            { id: 'cancel', label: 'No, skip' },
           ]}
           onSelect={(id) => onDecision(id as 'confirm' | 'cancel')}
         />
         {message.decided && (
-          <p className="text-[12px] text-textItemBlur">Decision recorded.</p>
+          <p className="text-[12px] text-textItemBlur">Got it.</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Draft preview bubble
+// ---------------------------------------------------------------------------
+
+function formatPublishAt(publishAt: string): string {
+  if (publishAt === 'now') return 'Posting right away';
+  const d = new Date(publishAt);
+  if (!isNaN(d.getTime())) {
+    return `Scheduled for ${d.toLocaleString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })}`;
+  }
+  return `Scheduled for ${publishAt}`;
+}
+
+const DraftPreviewBubble: FC<{
+  message: DraftPreviewMsg;
+  onDecision: (decision: 'confirm' | 'cancel') => void;
+}> = ({ message, onDecision }) => {
+  return (
+    <div className="flex gap-[12px] flex-row">
+      <div className="w-[32px] h-[32px] rounded-[10px] bg-newBgLineColor flex-shrink-0 flex items-center justify-center text-textItemFocused">
+        <AutopilotIcon size={16} />
+      </div>
+      <div className="max-w-[80%] flex flex-col gap-[10px]">
+        <p className="text-[13px] text-textItemBlur">{formatPublishAt(message.publishAt)}</p>
+
+        {message.imageUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={message.imageUrl}
+            alt="Generated image"
+            className="rounded-[10px] max-h-[200px] object-cover"
+          />
+        )}
+
+        {message.drafts.map((draft) => (
+          <div
+            key={draft.platform}
+            className="rounded-[12px] bg-newBgLineColor text-newTextColor text-[14px] leading-[1.6] overflow-hidden"
+          >
+            <div className="px-[12px] py-[8px] border-b border-[rgba(255,255,255,0.07)] text-[12px] font-[600] text-textItemBlur uppercase tracking-wide">
+              {draft.platform}
+            </div>
+            <div className="px-[14px] py-[10px] whitespace-pre-wrap">{draft.content}</div>
+            {draft.hashtags && draft.hashtags.length > 0 && (
+              <div className="px-[14px] pb-[10px] flex flex-wrap gap-[6px]">
+                {draft.hashtags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="text-[12px] text-textItemBlur bg-[rgba(255,255,255,0.05)] rounded-[6px] px-[8px] py-[2px]"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {!message.decided ? (
+          <div className="flex gap-[8px]">
+            <button
+              className="px-[14px] py-[7px] rounded-[8px] bg-boxFocused text-textItemFocused text-[13px] font-[600] hover:opacity-90 transition-opacity"
+              onClick={() => onDecision('confirm')}
+            >
+              Post it
+            </button>
+            <button
+              className="px-[14px] py-[7px] rounded-[8px] bg-newBgLineColor text-textItemBlur text-[13px] hover:text-newTextColor transition-colors"
+              onClick={() => onDecision('cancel')}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <p className={`text-[12px] text-textItemBlur ${message.confirmStatus === 'loading' ? 'animate-pulse' : ''}`}>
+            {message.confirmMessage ?? 'Done.'}
+          </p>
         )}
       </div>
     </div>
@@ -458,6 +719,86 @@ const StarterChip: FC<{
   >
     {label}
   </button>
+);
+
+// ---------------------------------------------------------------------------
+// Markdown renderer
+// ---------------------------------------------------------------------------
+
+const MarkdownContent: FC<{ content: string }> = ({ content }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      h1: ({ children }) => (
+        <h1 className="text-[18px] font-[700] mt-[12px] mb-[6px] first:mt-0">{children}</h1>
+      ),
+      h2: ({ children }) => (
+        <h2 className="text-[16px] font-[600] mt-[10px] mb-[4px] first:mt-0">{children}</h2>
+      ),
+      h3: ({ children }) => (
+        <h3 className="text-[15px] font-[600] mt-[8px] mb-[4px] first:mt-0">{children}</h3>
+      ),
+      p: ({ children }) => (
+        <p className="mb-[8px] last:mb-0 leading-[1.6]">{children}</p>
+      ),
+      ul: ({ children }) => (
+        <ul className="list-disc pl-[20px] mb-[8px] flex flex-col gap-[3px]">{children}</ul>
+      ),
+      ol: ({ children }) => (
+        <ol className="list-decimal pl-[20px] mb-[8px] flex flex-col gap-[3px]">{children}</ol>
+      ),
+      li: ({ children }) => (
+        <li className="leading-[1.5]">{children}</li>
+      ),
+      strong: ({ children }) => (
+        <strong className="font-[600]">{children}</strong>
+      ),
+      em: ({ children }) => (
+        <em className="italic">{children}</em>
+      ),
+      pre: ({ children }) => (
+        <pre className="bg-[rgba(0,0,0,0.25)] rounded-[6px] p-[12px] text-[13px] font-mono overflow-x-auto whitespace-pre mb-[8px] mt-[4px]">
+          {children}
+        </pre>
+      ),
+      code: ({ className, children }) => (
+        className
+          ? <code className="font-mono text-[13px]">{children}</code>
+          : <code className="bg-[rgba(0,0,0,0.2)] rounded-[4px] px-[5px] py-[2px] text-[13px] font-mono">{children}</code>
+      ),
+      blockquote: ({ children }) => (
+        <blockquote className="border-l-[3px] border-textItemBlur pl-[12px] italic opacity-80 mb-[8px]">
+          {children}
+        </blockquote>
+      ),
+      a: ({ href, children }) => (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline opacity-80 hover:opacity-100"
+        >
+          {children}
+        </a>
+      ),
+      hr: () => <hr className="border-newBgLineColor my-[12px] opacity-50" />,
+      table: ({ children }) => (
+        <div className="overflow-x-auto mb-[8px]">
+          <table className="w-full border-collapse text-[13px]">{children}</table>
+        </div>
+      ),
+      th: ({ children }) => (
+        <th className="border border-[rgba(255,255,255,0.15)] px-[10px] py-[6px] text-left font-[600] bg-[rgba(0,0,0,0.2)]">
+          {children}
+        </th>
+      ),
+      td: ({ children }) => (
+        <td className="border border-[rgba(255,255,255,0.1)] px-[10px] py-[6px]">{children}</td>
+      ),
+    }}
+  >
+    {content}
+  </ReactMarkdown>
 );
 
 // ---------------------------------------------------------------------------

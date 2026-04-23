@@ -38,6 +38,7 @@ import { PaypalWebhookController } from '@gitroom/backend/api/routes/paypal-webh
 import { PaypalWebhookService } from '@gitroom/autopilot/webhooks/paypal';
 import { AutopilotChatController } from '@gitroom/backend/api/routes/autopilot-chat.controller';
 import { AutopilotChatService } from '@gitroom/autopilot/chat/chat.service';
+import { DirectActionHandler } from '@gitroom/autopilot/chat/direct_action_handler';
 import { CadenceConfigService } from '@gitroom/autopilot/stack/cadence-config.service';
 
 const authenticatedController = [
@@ -76,6 +77,7 @@ const authenticatedController = [
     StripeService,
     PaypalWebhookService,
     AutopilotChatService,
+    DirectActionHandler,
     CadenceConfigService,
     OpenaiService,
     ExtractContentService,

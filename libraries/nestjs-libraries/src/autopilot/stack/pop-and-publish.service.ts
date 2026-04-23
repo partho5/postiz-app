@@ -66,13 +66,20 @@ export class PopAndPublishService {
         scheduledAt: { lte: now },
         status: ApScheduledSlotStatus.PENDING,
       },
+      select: {
+        id: true,
+        organizationId: true,
+        platform: true,
+        scheduledAt: true,
+        postCandidateId: true,
+      },
     });
 
     const result: TriggerResult = { triggered: 0, skipped: 0, alreadyClaimed: 0 };
 
     for (const slot of dueSlots) {
       try {
-        const outcome = await this._processSlot(slot.id, slot.organizationId, slot.platform, slot.scheduledAt);
+        const outcome = await this._processSlot(slot.id, slot.organizationId, slot.platform, slot.scheduledAt, slot.postCandidateId ?? null);
         if (outcome === 'triggered') result.triggered++;
         else if (outcome === 'skipped') result.skipped++;
         else result.alreadyClaimed++;
@@ -110,6 +117,7 @@ export class PopAndPublishService {
     organizationId: string,
     platform: string,
     scheduledAt: Date,
+    preBoundCandidateId: string | null = null,
   ): Promise<'triggered' | 'skipped' | 'already_claimed'> {
     // Step 1 — atomically claim the slot (PENDING → TRIGGERED).
     // If another runner already claimed it, updateMany returns count=0.
@@ -138,9 +146,27 @@ export class PopAndPublishService {
       return 'skipped';
     }
 
-    // Step 3 — pop the top candidate from the stack (PENDING → RESERVED).
-    // Fall back to the evergreen pool if the regular stack is empty.
-    let candidate = await popTop(this._prisma, organizationId, platform);
+    // Step 3 — get a candidate. Use the pre-bound one (direct-action posts) if
+    // available, otherwise pop the top from the stack, then fall back to evergreen.
+    let candidate: Awaited<ReturnType<typeof popTop>>;
+
+    if (preBoundCandidateId) {
+      const row = await this._prisma.apPostCandidate.findFirst({
+        where: { id: preBoundCandidateId, organizationId, status: ApPostCandidateStatus.PENDING },
+      });
+      if (row) {
+        // Reserve it so it can't be popped by a concurrent run.
+        await this._prisma.apPostCandidate.update({
+          where: { id: row.id },
+          data: { status: ApPostCandidateStatus.RESERVED },
+        });
+        candidate = row;
+      } else {
+        candidate = null;
+      }
+    } else {
+      candidate = await popTop(this._prisma, organizationId, platform);
+    }
 
     if (!candidate) {
       candidate = await this._evergreenPool.pickFallback(organizationId, platform);
@@ -153,6 +179,11 @@ export class PopAndPublishService {
 
     // Step 4 — create a Postiz Post row and emit to the BullMQ 'post' queue.
     const group = makeId(10);
+    const mediaUrls = Array.isArray(candidate.mediaUrls) ? candidate.mediaUrls as string[] : [];
+    const imageField = mediaUrls.length > 0
+      ? JSON.stringify(mediaUrls.map((url) => ({ id: url, path: url })))
+      : undefined;
+
     const post = await this._prisma.post.create({
       data: {
         state: 'QUEUE',
@@ -161,6 +192,7 @@ export class PopAndPublishService {
         integrationId: integration.id,
         content: candidate.content,
         group,
+        ...(imageField ? { image: imageField } : {}),
       },
     });
 
