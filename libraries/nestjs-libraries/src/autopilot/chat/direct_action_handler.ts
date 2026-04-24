@@ -73,14 +73,27 @@ export class DirectActionHandler {
   ): Promise<string> {
     const availablePlatforms = await this._getAvailablePlatforms(org.id);
 
+    // Normalize timing: accept publishImmediately=true as-is;
+    // for scheduleAt, only keep it if it parses as a valid future ISO date.
+    // Anything else → leave both undefined so the state machine asks.
+    const publishImmediately: boolean | undefined =
+      directAction.publishImmediately === true ? true : undefined;
+    let scheduleAt: string | undefined;
+    if (!publishImmediately && directAction.scheduleAt) {
+      const d = new Date(directAction.scheduleAt);
+      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) {
+        scheduleAt = d.toISOString();
+      }
+    }
+
     const collected: CollectedData = {
       topic: directAction.topic,
       content: directAction.content,
       platforms: directAction.platforms?.length
         ? this._matchPlatforms(directAction.platforms, availablePlatforms)
         : undefined,
-      publishImmediately: directAction.publishImmediately,
-      scheduleAt: directAction.scheduleAt,
+      publishImmediately,
+      scheduleAt,
       countPerPlatform: directAction.countPerPlatform ?? 1,
       wantsImage: directAction.wantsImage,
     };

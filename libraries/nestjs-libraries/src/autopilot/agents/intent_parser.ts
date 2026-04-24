@@ -107,11 +107,11 @@ const intentResultSchema = z
 // ---------------------------------------------------------------------------
 
 const INTENT_CLASSES = [
-  'direct_action        — user wants the system to act right now (e.g. "post this to Twitter")',
+  'direct_action        — user wants to CREATE and publish NEW content (e.g. "post about X", "schedule a post"). NOT for delete, remove, cancel, edit, or manage existing posts.',
   'config_change_request — user wants to change a setting (e.g. "post more often on weekdays")',
   'question             — user is asking for information (e.g. "how many posts went out this week?")',
   'small_talk           — casual / off-topic (e.g. "thanks", "hello")',
-  'unclear              — cannot be categorised',
+  'unclear              — cannot be categorised, OR user wants to delete/cancel/edit/manage an existing post',
 ].join('\n  ');
 
 const ENTITIES = [
@@ -128,14 +128,14 @@ Given a user message, output a JSON object with:
   intent: one of:
   ${INTENT_CLASSES}
 
-For intent = "direct_action" ALSO include any fields that are discernible:
-  topic              - what the post should be about (paraphrase from the message)
-  content            - verbatim post text if the user provided exact wording
-  platforms          - array of platform names the user mentioned (e.g. ["facebook","linkedin"])
-  publishImmediately - true if the user says "now", "immediately", "right now"
-  scheduleAt         - specific time the user gave (ISO 8601 or natural phrase like "tomorrow 3pm")
-  countPerPlatform   - number of posts to generate per platform (default 1)
-  wantsImage         - true only if the user explicitly asked for an image
+For intent = "direct_action" ALSO include these fields — but ONLY if explicitly stated in the CURRENT user message (after the --- separator). Do NOT inherit or infer them from earlier turns shown above the separator:
+  topic              - what the post should be about (paraphrase from the current message only)
+  content            - verbatim post text if the user provided exact wording in the current message
+  platforms          - platforms the user named in the current message (e.g. ["facebook"]). Omit if not mentioned.
+  publishImmediately - true ONLY if the current message contains "now", "immediately", "right now", "asap". Never default to true. Omit if timing is not mentioned.
+  scheduleAt         - specific future time from the current message in ISO 8601 format. Omit if not mentioned.
+  countPerPlatform   - number of posts to generate per platform. Omit if not mentioned.
+  wantsImage         - true only if the user explicitly asked for an image in the current message. Omit otherwise.
 
 For intent = "config_change_request" ALSO include:
   targetEntity - the entity to mutate, one of:
@@ -185,14 +185,15 @@ export async function parseIntent(
   // classifier understands references like "as per the prompt earlier".
   const historyPrefix =
     recentHistory && recentHistory.length > 0
-      ? recentHistory
+      ? '[PRIOR CONVERSATION — for intent context only. Do NOT extract direct_action fields from these turns.]\n' +
+        recentHistory
           .slice(-3)
           .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 400)}`)
-          .join('\n') + '\n---\n'
+          .join('\n') + '\n[END PRIOR CONVERSATION]\n---\n'
       : '';
 
   const classificationPrompt = historyPrefix
-    ? `${historyPrefix}User (latest): ${message}`
+    ? `${historyPrefix}[CURRENT MESSAGE — classify this and extract direct_action fields from here only]\nUser: ${message}`
     : message;
 
   const system = buildSystemPrompt(tenantContext);

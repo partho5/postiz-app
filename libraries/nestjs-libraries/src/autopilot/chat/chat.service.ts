@@ -61,6 +61,7 @@ import type {
   ChatConfirmEvent,
   ChatActionResultEvent,
 } from '../orchestrator';
+import { runOrchestrator } from '../agents/orchestrator';
 
 // ---------------------------------------------------------------------------
 // Stream event types
@@ -265,70 +266,66 @@ export class AutopilotChatService {
       emit({ type: 'status', message: 'Thinking…' });
 
       // Always parse intent first — the result is needed to decide whether
-      // to continue a pending action or abort it.
+      // to route through the orchestrator (post-creation / management
+      // verbs) or fall back to the proposal / streamed-text paths.
       // parseIntent never throws; on schema failure it returns { intent: 'unclear' }.
       const recentForIntent = await this._loadRecentMessages(org.id, 6);
       const intentResult = await parseIntent(input.content, llm, tenantCtx, recentForIntent);
 
-      // Check for an in-progress direct action.
+      // Check for an in-progress direct action — its presence forces the
+      // orchestrator route so the user's reply is read as a follow-up
+      // (the bug fix for "after 5 minutes" scheduling loops).
       const pendingAction = await this._prisma.apPendingAction.findUnique({
         where: { organizationId: org.id },
       });
-
       const hasPending = !!(pendingAction && pendingAction.expiresAt > new Date());
 
-      // Decide whether to abort the pending action.
-      // Abort when:  (a) user explicitly cancels, or (b) user starts a brand-new post request.
-      const wantsAbort = hasPending && (
-        this._isCancellationMessage(input.content) ||
-        intentResult.intent === 'direct_action'
-      );
+      // Slice 1.3.c: route post-creation + any pending-draft turn through
+      // the orchestrator agent. Other intents keep their existing paths
+      // until 1.3.d–f migrate them.
+      const useOrchestrator = intentResult.intent === 'direct_action' || hasPending;
 
-      if (wantsAbort) {
-        await this._directAction.cancelAction(org.id);
-      }
-
-      if (hasPending && !wantsAbort) {
-        // User is answering a follow-up question — continue the pending flow.
+      if (useOrchestrator) {
         try {
-          assistantContent = await this._directAction.continuePending(
-            org,
-            pendingAction!.id,
-            pendingAction!.waitingFor,
-            pendingAction!.collectedData,
-            input.content,
-            llm,
-            emit,
+          // _loadRecentMessages includes the just-persisted user message
+          // as the last item (Step 1 wrote it). Strip it so the
+          // orchestrator doesn't see the current turn twice.
+          const recentMessages = await this._loadRecentMessages(org.id, 20);
+          const history = recentMessages.slice(0, -1);
+
+          const result = await runOrchestrator(
+            {
+              org,
+              user,
+              db: this._prisma,
+              llm,
+              emit,
+              logger: {
+                info: (m, ...rest) => this.logger.log(m, ...rest),
+                warn: (m, ...rest) => this.logger.warn(m, ...rest),
+                error: (m, ...rest) => this.logger.error(m, ...rest),
+                debug: (m, ...rest) => this.logger.debug(m, ...rest),
+              },
+              // TODO(slice 1.3.d/e): derive timezone from cadence config / user prefs.
+              timezone: 'UTC',
+              directAction: this._directAction,
+            },
+            {
+              message: input.content,
+              history,
+              tenantCtx,
+            },
           );
+          assistantContent = result.text;
         } catch (err) {
-          const msg = `Direct action failed: ${err instanceof Error ? err.message : String(err)}`;
+          const msg = `Orchestrator failed: ${err instanceof Error ? err.message : String(err)}`;
           this.logger.error(msg, err);
           emit({ type: 'error', message: msg });
           return;
         }
       } else {
         // Step 5: Generate response based on (possibly fresh) intent.
-        if (intentResult.intent === 'direct_action') {
-          // 5a — Direct action (post creation) flow.
-          try {
-            assistantContent = await this._directAction.startFlow(
-              org,
-              user,
-              intentResult.directAction ?? {},
-              llm,
-              emit,
-            );
-          } catch (err) {
-            const msg = `Direct action failed: ${err instanceof Error ? err.message : String(err)}`;
-            this.logger.error(msg, err);
-            emit({ type: 'error', message: msg });
-            return;
-          }
-        } else if (wantsAbort) {
-          // User cancelled a pending action with no new command — confirm and idle.
-          assistantContent = "Cancelled.";
-          emit({ type: 'text', chunk: assistantContent });
-        } else if (intentResult.intent === 'config_change_request' && intentResult.draft) {
+        if (intentResult.intent === 'config_change_request' && intentResult.draft) {
           // 5b — Proposal path.
           const draft = intentResult.draft;
           const proposalId = await createProposal(
