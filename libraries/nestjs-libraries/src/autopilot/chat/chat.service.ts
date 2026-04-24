@@ -55,6 +55,12 @@ import {
   DirectActionHandler,
   type ChatDraftPreviewEvent,
 } from './direct_action_handler';
+import type {
+  ChatScheduledListEvent,
+  ChatAnalyticsCardEvent,
+  ChatConfirmEvent,
+  ChatActionResultEvent,
+} from '../orchestrator';
 
 // ---------------------------------------------------------------------------
 // Stream event types
@@ -93,7 +99,11 @@ export type ChatStreamEvent =
   | ChatDraftPreviewEvent
   | ChatStatusEvent
   | ChatDoneEvent
-  | ChatErrorEvent;
+  | ChatErrorEvent
+  | ChatScheduledListEvent
+  | ChatAnalyticsCardEvent
+  | ChatConfirmEvent
+  | ChatActionResultEvent;
 
 // ---------------------------------------------------------------------------
 // Input
