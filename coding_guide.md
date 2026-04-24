@@ -115,6 +115,16 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 - [x] 4.5 — Analyzer: anonymized strategy pattern extraction
 - [x] 4.6 — Opt-out setting surface in chat
 
+### Phase 1 — Chat Core revisit (versatile orchestrator)
+> Replaces the rigid intent_parser → branching pipeline (slice 1.3) with a tool-use orchestrator agent. Motivated by failure case: "schedule a post after 5 minutes" loops because intent_parser is stateless and re-classifies follow-up answers as new direct_action requests, and `_parseTiming` cannot resolve relative times reliably. New design: deterministic time parser + orchestrator that sees full state snapshot and calls tools (existing skills) iteratively.
+- [ ] 1.3.a — `chrono-node` integration + `autopilot/time/parse.ts` (deterministic time parser, formatForUser)
+- [ ] 1.3.b — Orchestrator tool registry types + extended SSE event types
+- [ ] 1.3.c — Orchestrator agent skeleton with starter tools (`schedule_post`, `list_scheduled_posts`, `cancel_pending_draft`, `clarify_with_user`); chat.service routes through it; **fixes "after 5 minutes"**
+- [ ] 1.3.d — Management tools (`cancel_scheduled_post`, `reschedule_post`, `pause_posting`, `resume_posting`, `rollback_published_post`)
+- [ ] 1.3.e — Insight tools (`analytics_snapshot`, `research_topic`, `scrape_competitor`)
+- [ ] 1.3.f — Profile/memory tools (`update_business_profile`, `get_profile`, `set_strategy_optout`, `save_memory`, `recall_memory`, `get_older_history`); deprecate `intent_parser` from normal flow
+- [ ] 1.3.g — Frontend SSE event renderers (scheduled-list bubble, analytics card, reschedule picker, generic confirmation card)
+
 ### Phase 5 — Reports
 - [ ] 5.1 — Report skill skeleton (kind, range, channel)
 - [ ] 5.2 — Email delivery via existing Resend integration
@@ -984,6 +994,99 @@ Each slice is short enough for a single session. If a slice feels heavy, it's ac
 - **Definition of done:** skill registered in SKILL_REGISTRY; unit tests cover: successful rollback updates all three rows; calling twice is idempotent; wrong tenant ID throws; Postiz Post already deleted → still succeeds; typecheck passes.
 - **Out of scope:** platform-side deletion (no Postiz provider delete API), BullMQ job cancellation (the post has already been published when rollback is called; the BullMQ job completed long ago), UI surface (Phase 5+), Analyzer agent wiring (slice 4.4).
 
+### Phase 1 revisit — versatile orchestrator (sub-slices of 1.3)
+
+> **Why this revisit exists.** Slice 1.3 (intent_parser) treats every chat message as an independent classification problem. When a multi-turn flow is in progress (e.g. waiting on a timing answer), the parser is blind to that state and re-classifies follow-ups like "after 5 minutes" as fresh `direct_action` requests. Combined with `chat.service.ts`'s "any direct_action while pending → cancel and restart" rule, the user gets stuck in a loop. The fix is structural: replace the classify-then-branch pipeline with an LLM **orchestrator** that sees current state and decides what to do by *calling tools* (the existing skills), not by being routed by code. Time understanding is fixed by adding `chrono-node` as a deterministic first pass.
+
+#### Slice 1.3.a — chrono-node time parser
+
+- **Goal:** Add a deterministic, locale-aware time-expression parser used by every tool that takes a `when` argument. Eliminates the "post or schedule it?" loop on relative inputs like "after 5 minutes", "in 2 hours", "tomorrow 9am".
+- **Depends on:** none (foundation for 1.3.c+).
+- **Files touched:**
+  - `package.json` (root) — add `chrono-node` dependency
+  - `libraries/nestjs-libraries/src/autopilot/time/parse.ts` — new file
+  - `libraries/nestjs-libraries/src/autopilot/time/parse.spec.ts` — new file
+- **Exported API:**
+  - `ParsedTime { date: Date; isRelative: boolean; isPast: boolean; sourcePhrase: string; confidence: 'high' | 'medium' | 'low' }`
+  - `parseTimeExpression(input: string, options?: { now?: Date; timezone?: string; forwardOnly?: boolean }): ParsedTime | null` — returns `null` when nothing parseable. `forwardOnly` (default `true`) treats past-only references like "3pm" (when now is 4pm) as tomorrow.
+  - `formatForUser(date: Date, options?: { now?: Date; timezone?: string }): string` — humanized: "in 5 minutes", "tomorrow at 3:00 PM", "Fri Apr 25 at 3:00 PM".
+- **Behavior:**
+  - Relative: `"after 5 minutes"`, `"in 2 hours"`, `"in 30 seconds"` → `now + delta`, `confidence: 'high'`, `isRelative: true`.
+  - Absolute (today/future): `"tomorrow 9am"`, `"Friday 3pm"`, `"next Monday at 10"` → that wall-clock moment in `timezone`, `confidence: 'high'`.
+  - Bare time (`"3pm"`): if past today and `forwardOnly`, roll to tomorrow and mark `isPast: false` (we adjusted), `confidence: 'medium'`.
+  - ISO 8601 (`"2026-05-01T10:00:00Z"`): pass through, `confidence: 'high'`.
+  - Unparseable (`"hello"`, `""`, single digit `"3"`): return `null`.
+- **Definition of done:** unit tests cover all categories above (relative, absolute, bare time forward-roll, ISO, unparseable, null timezone, explicit timezone); `formatForUser` produces the documented strings; typecheck passes; jest passes.
+- **Out of scope:** wiring into existing handlers (1.3.c does that); LLM fallback for chrono failures (1.3.c will let the orchestrator decide); non-English locales (default to `chrono.casual.en`).
+
+#### Slice 1.3.b — Orchestrator tool registry types + extended SSE event types
+
+- **Goal:** Define the type contract that the orchestrator agent (1.3.c) will use to discover, schema-validate, and dispatch tools. Extend `ChatStreamEvent` so tool handlers can emit richer UI payloads (lists, cards, confirmations) without sentence-stream hacks.
+- **Depends on:** 1.3.a (only for type-imports if needed).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/types.ts` — new
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/index.ts` — new (re-exports)
+  - `libraries/nestjs-libraries/src/autopilot/chat/chat.service.ts` — extend `ChatStreamEvent` union
+- **Exported API:**
+  - `OrchestratorTool<I, O> { name: string; description: string; parameters: z.ZodType<I>; handler: (ctx: OrchestratorContext, input: I) => Promise<OrchestratorToolResult<O>> }`
+  - `OrchestratorContext { org: Organization; user: User; db: PrismaService; llm: LlmProvider; emit: (event: ChatStreamEvent) => void; now: Date; timezone: string; logger: AgentLogger }`
+  - `OrchestratorToolResult<O> { observation: string; data?: O; emitted?: boolean }` — `observation` is what the LLM sees on the next turn; `emitted` flags that an SSE side-event was already sent.
+  - New SSE event types: `ChatScheduledListEvent`, `ChatAnalyticsCardEvent`, `ChatConfirmEvent`, `ChatActionResultEvent` — discriminated by `type`.
+- **Definition of done:** types compile; no runtime code yet; placeholder tool registry exported as empty array.
+- **Out of scope:** any actual tool implementations (those land in 1.3.c+); orchestrator agent itself.
+
+#### Slice 1.3.c — Orchestrator agent + chat-service integration (the bug-fix slice)
+
+- **Goal:** Replace the current intent_parser → branching pipeline (in `chat.service.ts` non-onboarding path) with an orchestrator agent that uses `generateText({ tools, … })` from `ai-v5`. Ship enough tools to make the failing scenario work end-to-end.
+- **Depends on:** 1.3.a (time parser), 1.3.b (types), existing services (DirectActionHandler, slot-scheduler, stack).
+- **Files touched:**
+  - `libraries/nestjs-libraries/src/autopilot/agents/orchestrator.ts` — new agent
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/tools/schedule_post.ts` — new
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/tools/list_scheduled_posts.ts` — new
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/tools/cancel_pending_draft.ts` — new
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/tools/clarify_with_user.ts` — new
+  - `libraries/nestjs-libraries/src/autopilot/orchestrator/state-snapshot.ts` — builds the per-turn state-snapshot block injected into the system prompt
+  - `libraries/nestjs-libraries/src/autopilot/chat/chat.service.ts` — non-onboarding path now calls the orchestrator
+  - specs alongside each new file
+- **System prompt structure:** role + style rules + state snapshot block (`now`, `timezone`, `niche`, `connected platforms`, `active cadence`, `pending action state`, `recent scheduled count`) + tool descriptions (auto-generated from registry).
+- **Tool dispatch loop:** uses `generateText` with `tools`, `maxSteps: 5`. Each tool call's `observation` becomes the next-turn input; the LLM then either calls another tool or produces final text.
+- **DirectAction state machine:** kept; `schedule_post` tool internally invokes `DirectActionHandler.startFlow` / `continuePending` so the existing draft_preview UX is unchanged.
+- **Definition of done:** failing scenario `"schedule a post after 2 minutes"` → `"after 5 minutes"` produces a draft preview with `publishAt` 5 minutes from now; orchestrator never re-asks the same question twice in a row in tests; typecheck + jest pass.
+- **Out of scope:** non-starter tools (1.3.d–f); frontend renderers for new event types (1.3.g — until then, frontend gracefully ignores unknown SSE event types).
+
+#### Slice 1.3.d — Management tools
+
+- **Goal:** Cancel/reschedule/pause/rollback verbs available conversationally.
+- **Depends on:** 1.3.c.
+- **Files touched:**
+  - `orchestrator/tools/cancel_scheduled_post.ts`, `reschedule_post.ts`, `pause_posting.ts`, `resume_posting.ts`, `rollback_published_post.ts`
+  - register in tool registry
+- **Underlying services:** `slot-scheduler`, `stack`, `cadence-config.service`, `rollback_post` skill.
+- **Definition of done:** unit tests per tool; orchestrator can resolve commands like "cancel my Friday LinkedIn post", "reschedule it to Monday 9am", "pause Twitter for a week".
+- **Out of scope:** UI confirm dialogs (1.3.g), bulk operations.
+
+#### Slice 1.3.e — Insight tools
+
+- **Goal:** Wire `analytics_snapshot`, `research_topic`, `scrape_competitor` skills as orchestrator tools.
+- **Depends on:** 1.3.c, slices 3.4/3.5/4.1.
+- **Files touched:** `orchestrator/tools/analytics_snapshot.ts`, `research_topic.ts`, `scrape_competitor.ts`.
+- **Definition of done:** "how did my LinkedIn perform last week?" returns observation that LLM summarizes; "research X" calls Tavily; per-tool tests pass.
+
+#### Slice 1.3.f — Profile/memory tools + intent_parser deprecation
+
+- **Goal:** Surface profile updates (via existing proposal pipeline), memory read/write, and chat-history dipping. Remove `parseIntent` from the non-onboarding path entirely.
+- **Depends on:** 1.3.c–e.
+- **Files touched:** `orchestrator/tools/update_business_profile.ts`, `get_profile.ts`, `set_strategy_optout.ts`, `save_memory.ts`, `recall_memory.ts`, `get_older_history.ts`. `chat.service.ts` — drop `parseIntent` call; onboarding-only branch keeps using `analyzeOnboarding`.
+- **Definition of done:** profile-change requests still go through `createProposal` (no direct write); memory tools round-trip; intent_parser no longer imported by chat.service.ts.
+
+#### Slice 1.3.g — Frontend SSE event renderers
+
+- **Goal:** Render the new event types from 1.3.b in the chat UI.
+- **Depends on:** 1.3.c–f.
+- **Files touched:** `apps/frontend/src/components/autopilot/chat-layout.tsx`; new components in `apps/frontend/src/components/autopilot/` (e.g. `scheduled-list-bubble.tsx`, `analytics-card.tsx`, `confirm-bubble.tsx`).
+- **Definition of done:** each event type has a renderer; clicking actions in renderers calls back to backend (cancel, confirm, reschedule).
+- **Out of scope:** mobile polish, animations.
+
 ### Phases 5–9 — summarized
 
 Later phases list slice IDs and one-line goals in §Status tracker. **Before starting any slice in Phase 5+, expand it in this file** with the same structure used above (Goal / Depends on / Files / Definition of done / Out of scope). That expansion is itself the first activity of the session; commit it separately from implementation if helpful.
@@ -1084,4 +1187,5 @@ Changes to this guide itself (new slices added, slice reshaped, conventions upda
 
 <!-- meta begin -->
 - created — initial skeleton, Phase 0 + Phase 1 fully specified, Phases 2–9 listed only.
+- 2026-04-23 — added Phase 1 revisit: sub-slices 1.3.a–1.3.g for the versatile orchestrator (replaces the rigid intent_parser → branching flow with a tool-use agent + chrono-node time parser). Motivated by "after N minutes" scheduling loop.
 <!-- meta end -->
