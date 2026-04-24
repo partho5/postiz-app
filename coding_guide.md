@@ -117,7 +117,7 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
 
 ### Phase 1 — Chat Core revisit (versatile orchestrator)
 > Replaces the rigid intent_parser → branching pipeline (slice 1.3) with a tool-use orchestrator agent. Motivated by failure case: "schedule a post after 5 minutes" loops because intent_parser is stateless and re-classifies follow-up answers as new direct_action requests, and `_parseTiming` cannot resolve relative times reliably. New design: deterministic time parser + orchestrator that sees full state snapshot and calls tools (existing skills) iteratively.
-- [ ] 1.3.a — `chrono-node` integration + `autopilot/time/parse.ts` (deterministic time parser, formatForUser)
+- [x] 1.3.a — `chrono-node` integration + `autopilot/time/parse.ts` (deterministic time parser, formatForUser)
 - [ ] 1.3.b — Orchestrator tool registry types + extended SSE event types
 - [ ] 1.3.c — Orchestrator agent skeleton with starter tools (`schedule_post`, `list_scheduled_posts`, `cancel_pending_draft`, `clarify_with_user`); chat.service routes through it; **fixes "after 5 minutes"**
 - [ ] 1.3.d — Management tools (`cancel_scheduled_post`, `reschedule_post`, `pause_posting`, `resume_posting`, `rollback_published_post`)
@@ -320,6 +320,12 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
   - `RewriteInput { draft: string, sourcePlatform?: string, targetPlatform: string, guidelines?: string }`.
   - `RewriteOutput { content, hookType?, cta?, hashtags?, characterCount, originalDraft, platform }`.
 - **Copywriter exports added**: `PLATFORM_SPECS`, `DEFAULT_PLATFORM_SPEC`, `PlatformSpec` now exported from `autopilot/agents/copywriter.ts` (were private before 3.3).
+
+- **Time parser (slice 1.3.a)**: `autopilot/time/parse.ts`. Exports:
+  - `parseTimeExpression(input: string, options?: { now?: Date; timezone?: string; forwardOnly?: boolean }): ParsedTime | null` — deterministic chrono-node + ISO 8601 short-circuit. ISO inputs go straight through `new Date()`. Natural language is parsed against a tz-aware ref Date (server-local Date built from user's wall-clock at `now` in `timezone`), then `start.get('year'..'second')` components are converted to real UTC via `wallClockToUtc` from `stack/slot-scheduler.service.ts` (+ seconds added on top). `forwardOnly` (default true) makes bare past times like "3pm" roll to tomorrow.
+  - `formatForUser(date: Date, options?: { now?: Date; timezone?: string }): string` — humanises ("in 5 minutes", "tomorrow at 9:00 AM", "Friday at 3:00 PM", "Apr 30 at 7:00 PM", "30 seconds ago", "yesterday at …").
+  - `ParsedTime { date: Date; isRelative: boolean; isPast: boolean; sourcePhrase: string; confidence: 'high' | 'medium' | 'low' }`.
+  - **Use this** in any tool/agent that takes a `when` argument before falling back to LLM disambiguation.
 - **SKILL_REGISTRY**: first entry registered — `rewrite_for_platform` in `autopilot/skills/index.ts`.
 
 ### Key files added in Phase 4 — slice 4.6
@@ -1159,6 +1165,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-20 | 4.3 | done | schema.prisma (ApStrategyPattern + ApStrategyPatternType enum + @@unique([platform,patternKey]); ApTenantStrategyOptout + @unique organizationId + Organization back-relation); db push applied; client regenerated
 2026-04-20 | 4.4+4.5 | done | autopilot/agents/analyzer.ts (runAnalyzer, analyzerAgent; loads posts+profile, generateObject for insights+patterns, writes LEARNING memories, upserts ApStrategyPattern respecting opt-out); analyzer.spec.ts (26 tests); agents/index.ts updated; 336 autopilot tests green; typecheck green
 2026-04-20 | 4.6 | done | autopilot/chat/proposals.ts (applyTenantStrategyOptout: upsert on optedOut=true, deleteMany on optedOut=false; registered at module load); agents/intent_parser.ts (tenant_strategy_optout added to ENTITIES in system prompt); chat/chat.service.ts (loads opt-out status alongside profile, strategyOptout in tenantCtx, _buildReplyPrompt includes data-sharing status, getStrategyOptoutStatus method); autopilot-chat.controller.ts (GET /autopilot/chat/settings/strategy-optout); proposals.spec.ts (6 new opt-out applier tests, 342 total green); chat-layout.tsx (Manage data sharing settings chip, describeChanges helper for opt-out proposal bubble); typecheck green
+2026-04-23 | 1.3.a | done | package.json (chrono-node ^2.9.0); autopilot/time/parse.ts (parseTimeExpression, formatForUser; ISO short-circuit + chrono with tz-aware ref + wallClockToUtc + seconds); time/parse.spec.ts (28 tests covering relative/absolute/forward-roll/ISO/multi-tz/format); reuses wallClockToUtc from stack/slot-scheduler.service.ts; 370 autopilot tests green; typecheck green
 <!-- entries end -->
 
 ---
