@@ -1,5 +1,5 @@
 /**
- * AutopilotChatService — slice 1.8 + 1.12 (onboarding)
+ * AutopilotChatService — slice 1.8 + 1.12 (onboarding) + 1.3.f (orchestrator-only)
  *
  * Handles the full chat ingress lifecycle for one user message:
  *   1. Persist user message  → ap_chat_message (role: USER)
@@ -7,25 +7,14 @@
  *   3. Load tenant context   → getStructuredProfile()
  *   4. Route:
  *      - First-run (no business_profile) → onboarding agent (slice 1.12)
- *      - Normal                          → intent parser (slice 1.3)
- *   5a. config_change_request / onboarding propose → createProposal(), emit proposal
- *   5b. other intents / onboarding ask             → streamText(), emit text chunks
- *   6. Persist assistant msg → ap_chat_message (role: ASSISTANT)
- *   7. emit done event
+ *      - Normal                          → orchestrator agent (slice 1.3.f)
+ *   5. Persist assistant msg → ap_chat_message (role: ASSISTANT)
+ *   6. emit done event
  *
- * The caller receives events through an `emit` callback so it can write
- * SSE frames, buffer responses, or route to other transports (Telegram etc.)
- * without this service knowing about HTTP.
- *
- * Dependencies verified against actual source files before writing:
- *   PrismaService                     — database/prisma/prisma.service.ts
- *   createLlmProvider()               — autopilot/llm.ts
- *   parseIntent(msg, llm, tenantCtx?) — agents/intent_parser.ts
- *   analyzeOnboarding(model, history, msg) — agents/onboarding.ts
- *   buildOnboardingReplyPrompt(topic, history) — agents/onboarding.ts
- *   createProposal(db, tenantId, draft, msgId?) — chat/proposals.ts
- *   getStructuredProfile(db, tenantId)          — memory/index.ts
- *   streamText                        — ai-v5
+ * Slice 1.3.f: `parseIntent` removed from the normal flow entirely. All
+ * non-onboarding turns route directly through `runOrchestrator`.  Profile/
+ * config changes are handled via `update_business_profile` and
+ * `set_strategy_optout` tools (proposal pipeline still fires under the hood).
  */
 
 import { Injectable, Logger } from '@nestjs/common';
@@ -38,7 +27,6 @@ import {
 import { streamText } from 'ai-v5';
 import { PrismaService } from '@gitroom/nestjs-libraries/database/prisma/prisma.service';
 import { createLlmProvider } from '../llm';
-import { parseIntent } from '../agents/intent_parser';
 import {
   analyzeOnboarding,
   buildOnboardingReplyPrompt,
@@ -55,6 +43,7 @@ import {
   DirectActionHandler,
   type ChatDraftPreviewEvent,
 } from './direct_action_handler';
+import { CadenceConfigService } from '../stack/cadence-config.service';
 import type {
   ChatScheduledListEvent,
   ChatAnalyticsCardEvent,
@@ -126,6 +115,7 @@ export class AutopilotChatService {
   constructor(
     private readonly _prisma: PrismaService,
     private readonly _directAction: DirectActionHandler,
+    private readonly _cadenceConfig: CadenceConfigService,
   ) {}
 
   /**
@@ -261,118 +251,52 @@ export class AutopilotChatService {
         assistantContent = fullText;
       }
     } else {
-      // --- Normal flow ---
-
+      // --- Normal flow (slice 1.3.f): all turns route through the orchestrator ---
       emit({ type: 'status', message: 'Thinking…' });
 
-      // Always parse intent first — the result is needed to decide whether
-      // to route through the orchestrator (post-creation / management
-      // verbs) or fall back to the proposal / streamed-text paths.
-      // parseIntent never throws; on schema failure it returns { intent: 'unclear' }.
-      const recentForIntent = await this._loadRecentMessages(org.id, 6);
-      const intentResult = await parseIntent(input.content, llm, tenantCtx, recentForIntent);
+      try {
+        // _loadRecentMessages includes the just-persisted user message as the
+        // last item (Step 1 wrote it). Strip it so the orchestrator doesn't
+        // see the current turn twice in its messages array.
+        const recentMessages = await this._loadRecentMessages(org.id, 20);
+        const history = recentMessages.slice(0, -1);
 
-      // Check for an in-progress direct action — its presence forces the
-      // orchestrator route so the user's reply is read as a follow-up
-      // (the bug fix for "after 5 minutes" scheduling loops).
-      const pendingAction = await this._prisma.apPendingAction.findUnique({
-        where: { organizationId: org.id },
-      });
-      const hasPending = !!(pendingAction && pendingAction.expiresAt > new Date());
+        // Derive timezone from the tenant's first active cadence config.
+        const tzConfig = await this._prisma.apCadenceConfig.findFirst({
+          where: { organizationId: org.id, active: true },
+          select: { timezone: true },
+        });
+        const timezone = tzConfig?.timezone ?? 'UTC';
 
-      // Slice 1.3.c: route post-creation + any pending-draft turn through
-      // the orchestrator agent. Other intents keep their existing paths
-      // until 1.3.d–f migrate them.
-      const useOrchestrator = intentResult.intent === 'direct_action' || hasPending;
-
-      if (useOrchestrator) {
-        try {
-          // _loadRecentMessages includes the just-persisted user message
-          // as the last item (Step 1 wrote it). Strip it so the
-          // orchestrator doesn't see the current turn twice.
-          const recentMessages = await this._loadRecentMessages(org.id, 20);
-          const history = recentMessages.slice(0, -1);
-
-          const result = await runOrchestrator(
-            {
-              org,
-              user,
-              db: this._prisma,
-              llm,
-              emit,
-              logger: {
-                info: (m, ...rest) => this.logger.log(m, ...rest),
-                warn: (m, ...rest) => this.logger.warn(m, ...rest),
-                error: (m, ...rest) => this.logger.error(m, ...rest),
-                debug: (m, ...rest) => this.logger.debug(m, ...rest),
-              },
-              // TODO(slice 1.3.d/e): derive timezone from cadence config / user prefs.
-              timezone: 'UTC',
-              directAction: this._directAction,
+        const result = await runOrchestrator(
+          {
+            org,
+            user,
+            db: this._prisma,
+            llm,
+            emit,
+            logger: {
+              info: (m, ...rest) => this.logger.log(m, ...rest),
+              warn: (m, ...rest) => this.logger.warn(m, ...rest),
+              error: (m, ...rest) => this.logger.error(m, ...rest),
+              debug: (m, ...rest) => this.logger.debug(m, ...rest),
             },
-            {
-              message: input.content,
-              history,
-              tenantCtx,
-            },
-          );
-          assistantContent = result.text;
-        } catch (err) {
-          const msg = `Orchestrator failed: ${err instanceof Error ? err.message : String(err)}`;
-          this.logger.error(msg, err);
-          emit({ type: 'error', message: msg });
-          return;
-        }
-      } else {
-        // Step 5: Generate response based on (possibly fresh) intent.
-        if (intentResult.intent === 'config_change_request' && intentResult.draft) {
-          // 5b — Proposal path.
-          const draft = intentResult.draft;
-          const proposalId = await createProposal(
-            this._prisma,
-            org.id,
-            {
-              targetEntity: draft.targetEntity,
-              targetId: draft.targetId,
-              changes: draft.changes,
-              rationale: draft.rationale,
-            },
-            userMsg.id,
-          );
-
-          assistantContent = draft.rationale;
-          emit({
-            type: 'proposal',
-            proposalId,
-            rationale: draft.rationale,
-            targetEntity: draft.targetEntity,
-            changes: draft.changes,
-          });
-        } else {
-          // 5c — Streamed text response.
-          let fullText = '';
-          try {
-            // Load recent history (includes the just-persisted user message at the end).
-            const recentMessages = await this._loadRecentMessages(org.id);
-            const { textStream } = streamText({
-              model: llm.model,
-              messages: recentMessages,
-              system: this._buildReplyPrompt(intentResult.intent, tenantCtx),
-            });
-
-            for await (const chunk of textStream) {
-              fullText += chunk;
-              emit({ type: 'text', chunk });
-            }
-          } catch (err) {
-            const msg = `Text generation failed: ${err instanceof Error ? err.message : String(err)}`;
-            this.logger.error(msg, err);
-            emit({ type: 'error', message: msg });
-            return;
-          }
-
-          assistantContent = fullText;
-        }
+            timezone,
+            directAction: this._directAction,
+            cadenceConfig: this._cadenceConfig,
+          },
+          {
+            message: input.content,
+            history,
+            tenantCtx,
+          },
+        );
+        assistantContent = result.text;
+      } catch (err) {
+        const msg = `Orchestrator failed: ${err instanceof Error ? err.message : String(err)}`;
+        this.logger.error(msg, err);
+        emit({ type: 'error', message: msg });
+        return;
       }
     }
 
@@ -399,16 +323,6 @@ export class AutopilotChatService {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /**
-   * Returns true when the message is an explicit cancellation or reset command.
-   * Keyword-based — no LLM call needed.
-   */
-  private _isCancellationMessage(message: string): boolean {
-    return /\b(cancel|abort|stop|forget it|nevermind|never mind|start over|reset|quit|exit|drop it|discard|nope|no thanks)\b/i.test(
-      message,
-    );
-  }
-
   private _mapSource(source: 'web' | 'telegram' | 'api'): ApChatMessageSource {
     switch (source) {
       case 'telegram':
@@ -418,26 +332,6 @@ export class AutopilotChatService {
       default:
         return ApChatMessageSource.WEB;
     }
-  }
-
-  private _buildReplyPrompt(
-    intent: string,
-    tenantCtx?: { niche?: string; goals?: unknown; strategyOptout?: boolean },
-  ): string {
-    const lines = [
-      'You are a sharp, experienced social media manager — direct, no fluff.',
-      'Tone: confident and brief. No filler phrases like "Great question!", "Certainly!", "Of course!", "I\'d be happy to", or "What else can I help you with?".',
-      'Answer the question. If you need to ask something, ask it in one short sentence.',
-    ];
-    if (tenantCtx?.niche) {
-      lines.push(`Business niche: ${tenantCtx.niche}.`);
-    }
-    if (tenantCtx?.strategyOptout !== undefined) {
-      const status = tenantCtx.strategyOptout ? 'opted out' : 'opted in';
-      lines.push(`Data sharing: ${status} of contributing anonymized strategy patterns.`);
-    }
-    lines.push(`Intent: ${intent}.`);
-    return lines.join('\n');
   }
 
   // ---------------------------------------------------------------------------

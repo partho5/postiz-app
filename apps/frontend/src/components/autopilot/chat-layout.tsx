@@ -45,12 +45,53 @@ type DraftPreviewMsg = {
   id: string;
   role: 'draft_preview';
   pendingActionId: string;
-  drafts: Array<{ platform: string; content: string; hashtags?: string[] }>;
+  posts: Array<{
+    topic: string;
+    platform: string;
+    content: string;
+    hashtags?: string[];
+    scheduledAt: string;
+    mediaUrl?: string;
+  }>;
   imageUrl?: string;
-  publishAt: string;
   decided: boolean;
   confirmStatus?: 'loading' | 'done';
   confirmMessage?: string;
+};
+
+/** slice 1.3.g — rendered from `scheduled_list` SSE event */
+type ScheduledListMsg = {
+  id: string;
+  role: 'scheduled_list';
+  posts: Array<{
+    id: string;
+    platform: string;
+    content: string;
+    scheduledAt: string;
+    status: string;
+  }>;
+};
+
+/** slice 1.3.g — rendered from `action_result` SSE event */
+type ActionResultMsg = {
+  id: string;
+  role: 'action_result';
+  action: string;
+  ok: boolean;
+  message: string;
+};
+
+/** slice 1.3.g — rendered from `confirm` SSE event (future management flows) */
+type ConfirmMsg = {
+  id: string;
+  role: 'confirm';
+  confirmId: string;
+  action: string;
+  description: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  decided: boolean;
+  resultMessage?: string;
 };
 
 type ErrorMsg = {
@@ -59,7 +100,15 @@ type ErrorMsg = {
   content: string;
 };
 
-type Message = UserMsg | AssistantMsg | ProposalMsg | DraftPreviewMsg | ErrorMsg;
+type Message =
+  | UserMsg
+  | AssistantMsg
+  | ProposalMsg
+  | DraftPreviewMsg
+  | ScheduledListMsg
+  | ActionResultMsg
+  | ConfirmMsg
+  | ErrorMsg;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,6 +122,22 @@ function formatChanges(changes: Record<string, unknown>): string {
   return Object.entries(changes)
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
     .join(', ');
+}
+
+function truncateText(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+}
+
+function formatScheduledAt(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -226,25 +291,91 @@ export const AutopilotChatLayout: FC = () => {
                       id: draftMsgId,
                       role: 'draft_preview',
                       pendingActionId: event.pendingActionId as string,
-                      drafts: event.drafts as DraftPreviewMsg['drafts'],
+                      posts: event.posts as DraftPreviewMsg['posts'],
                       imageUrl: event.imageUrl as string | undefined,
-                      publishAt: event.publishAt as string,
                       decided: false,
                     } as DraftPreviewMsg)
                 );
                 break;
               }
 
+              // ── Slice 1.3.g new event renderers ───────────────────────
+
+              case 'scheduled_list': {
+                specialEmitted = true;
+                const listMsgId = makeId();
+                setMessages((prev) =>
+                  prev
+                    .filter((m) => m.id !== assistantMsgId)
+                    .concat({
+                      id: listMsgId,
+                      role: 'scheduled_list',
+                      posts: event.posts as ScheduledListMsg['posts'],
+                    } as ScheduledListMsg)
+                );
+                break;
+              }
+
+              case 'action_result': {
+                specialEmitted = true;
+                const resultMsgId = makeId();
+                setMessages((prev) =>
+                  prev
+                    .filter((m) => m.id !== assistantMsgId)
+                    .concat({
+                      id: resultMsgId,
+                      role: 'action_result',
+                      action: event.action as string,
+                      ok: event.ok as boolean,
+                      message: event.message as string,
+                    } as ActionResultMsg)
+                );
+                break;
+              }
+
+              case 'confirm': {
+                specialEmitted = true;
+                const confirmMsgId = makeId();
+                setMessages((prev) =>
+                  prev
+                    .filter((m) => m.id !== assistantMsgId)
+                    .concat({
+                      id: confirmMsgId,
+                      role: 'confirm',
+                      confirmId: event.confirmId as string,
+                      action: event.action as string,
+                      description: event.description as string,
+                      confirmLabel: (event.confirmLabel as string | undefined) ?? 'Confirm',
+                      cancelLabel: (event.cancelLabel as string | undefined) ?? 'Cancel',
+                      decided: false,
+                    } as ConfirmMsg)
+                );
+                break;
+              }
+
+              // ─────────────────────────────────────────────────────────
+
               case 'done': {
-                if (!specialEmitted) {
-                  setMessages((prev) =>
-                    prev.map((m): Message =>
-                      m.id === assistantMsgId && m.role === 'assistant'
-                        ? { ...m, streaming: false }
-                        : m
-                    )
+                setMessages((prev) => {
+                  const withStreamingOff = prev.map((m): Message =>
+                    m.id === assistantMsgId && m.role === 'assistant'
+                      ? { ...m, streaming: false }
+                      : m
                   );
-                }
+                  // Remove an empty assistant stub when a special event was the
+                  // real reply (the stub was not already filtered out above).
+                  if (specialEmitted) {
+                    return withStreamingOff.filter(
+                      (m) =>
+                        !(
+                          m.id === assistantMsgId &&
+                          m.role === 'assistant' &&
+                          (m as AssistantMsg).content === ''
+                        )
+                    );
+                  }
+                  return withStreamingOff;
+                });
                 break;
               }
 
@@ -349,10 +480,49 @@ export const AutopilotChatLayout: FC = () => {
     [fetch]
   );
 
+  /** Called by ConfirmBubble when the user clicks Confirm or Cancel. */
+  const handleConfirmDecision = useCallback(
+    async (confirmId: string, msgId: string, decision: 'confirm' | 'cancel') => {
+      setMessages((prev) =>
+        prev.map((m): Message =>
+          m.id === msgId && m.role === 'confirm'
+            ? { ...m, decided: true, resultMessage: decision === 'confirm' ? 'Confirming…' : 'Cancelling…' }
+            : m
+        )
+      );
+      try {
+        const res = await fetch(`/autopilot/chat/confirm/${confirmId}/${decision}`, {
+          method: 'PATCH',
+        });
+        const resultMessage = res.ok ? (decision === 'confirm' ? 'Done.' : 'Cancelled.') : 'Something went wrong.';
+        setMessages((prev) =>
+          prev.map((m): Message =>
+            m.id === msgId && m.role === 'confirm' ? { ...m, resultMessage } : m
+          )
+        );
+      } catch {
+        setMessages((prev) =>
+          prev.map((m): Message =>
+            m.id === msgId && m.role === 'confirm'
+              ? { ...m, resultMessage: 'Something went wrong.' }
+              : m
+          )
+        );
+      }
+    },
+    [fetch]
+  );
+
+  /** Prefills the textarea (used by ScheduledListBubble Reschedule button). */
+  const handlePrefillInput = useCallback((text: string) => {
+    setInput(text);
+    textareaRef.current?.focus();
+  }, []);
+
   return (
     <div className="flex flex-col flex-1 h-full overflow-hidden">
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto p-[24px] flex flex-col gap-[16px]">
+      <div className="flex-1 overflow-y-auto p-[2px] md:p-[24px] flex flex-col gap-[16px]">
         {messages.length === 0 ? (
           <WelcomeState onChipClick={handleSend} sending={sending} />
         ) : (
@@ -362,6 +532,9 @@ export const AutopilotChatLayout: FC = () => {
               message={msg}
               onProposalDecision={handleProposalDecision}
               onDraftDecision={handleDraftDecision}
+              onConfirmDecision={handleConfirmDecision}
+              onSendMessage={handleSend}
+              onPrefillInput={handlePrefillInput}
             />
           ))
         )}
@@ -369,7 +542,7 @@ export const AutopilotChatLayout: FC = () => {
       </div>
 
       {/* Input area */}
-      <div className="p-[16px] border-t border-newBgLineColor">
+      <div className="p-[2px] md:p-[16px] border-t border-newBgLineColor">
         <div className="flex gap-[12px] items-end bg-newBgColorInner rounded-[12px] p-[12px] border border-newBgLineColor focus-within:border-textItemBlur transition-colors">
           <textarea
             ref={textareaRef}
@@ -404,17 +577,12 @@ export const AutopilotChatLayout: FC = () => {
 
 const MessageRow: FC<{
   message: Message;
-  onProposalDecision: (
-    proposalId: string,
-    msgId: string,
-    decision: 'confirm' | 'cancel'
-  ) => void;
-  onDraftDecision: (
-    pendingActionId: string,
-    msgId: string,
-    decision: 'confirm' | 'cancel'
-  ) => void;
-}> = ({ message, onProposalDecision, onDraftDecision }) => {
+  onProposalDecision: (proposalId: string, msgId: string, decision: 'confirm' | 'cancel') => void;
+  onDraftDecision: (pendingActionId: string, msgId: string, decision: 'confirm' | 'cancel') => void;
+  onConfirmDecision: (confirmId: string, msgId: string, decision: 'confirm' | 'cancel') => void;
+  onSendMessage: (text: string) => void;
+  onPrefillInput: (text: string) => void;
+}> = ({ message, onProposalDecision, onDraftDecision, onConfirmDecision, onSendMessage, onPrefillInput }) => {
   if (message.role === 'user' || message.role === 'assistant') {
     return <ChatBubble message={message} />;
   }
@@ -434,7 +602,27 @@ const MessageRow: FC<{
       />
     );
   }
-  return <ErrorBubble message={message} />;
+  if (message.role === 'scheduled_list') {
+    return (
+      <ScheduledListBubble
+        message={message}
+        onSendMessage={onSendMessage}
+        onPrefillInput={onPrefillInput}
+      />
+    );
+  }
+  if (message.role === 'action_result') {
+    return <ActionResultBubble message={message} />;
+  }
+  if (message.role === 'confirm') {
+    return (
+      <ConfirmBubble
+        message={message}
+        onDecision={(d) => onConfirmDecision(message.confirmId, message.id, d)}
+      />
+    );
+  }
+  return <ErrorBubble message={message as ErrorMsg} />;
 };
 
 // ---------------------------------------------------------------------------
@@ -456,7 +644,7 @@ const ChatBubble: FC<{ message: UserMsg | AssistantMsg }> = ({ message }) => {
         </div>
       )}
       <div
-        className={`max-w-[70%] px-[14px] py-[10px] rounded-[12px] text-[14px] leading-[1.6] ${
+        className={`max-w-[90%] md:max-w-[70%] px-[14px] py-[10px] rounded-[12px] text-[14px] leading-[1.6] ${
           isUser
             ? 'bg-boxFocused text-textItemFocused rounded-tr-[4px] whitespace-pre-wrap'
             : 'bg-newBgLineColor text-newTextColor rounded-tl-[4px]'
@@ -487,7 +675,6 @@ const ChatBubble: FC<{ message: UserMsg | AssistantMsg }> = ({ message }) => {
 // Proposal bubble
 // ---------------------------------------------------------------------------
 
-/** Human-readable summary for a proposal's changes, by entity. */
 function describeChanges(
   targetEntity: string,
   changes: Record<string, unknown>,
@@ -539,7 +726,7 @@ const ProposalBubble: FC<{
       <div className="w-[32px] h-[32px] rounded-[10px] bg-newBgLineColor flex-shrink-0 flex items-center justify-center text-textItemFocused">
         <AutopilotIcon size={16} />
       </div>
-      <div className="max-w-[75%] flex flex-col gap-[10px]">
+      <div className="max-w-[95%] md:max-w-[75%] flex flex-col gap-[10px]">
         <div className="px-[14px] py-[10px] rounded-[12px] bg-newBgLineColor text-newTextColor text-[14px] leading-[1.6] rounded-tl-[4px]">
           {message.rationale}
         </div>
@@ -567,32 +754,20 @@ const ProposalBubble: FC<{
 // Draft preview bubble
 // ---------------------------------------------------------------------------
 
-function formatPublishAt(publishAt: string): string {
-  if (publishAt === 'now') return 'Posting right away';
-  const d = new Date(publishAt);
-  if (!isNaN(d.getTime())) {
-    return `Scheduled for ${d.toLocaleString(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })}`;
-  }
-  return `Scheduled for ${publishAt}`;
-}
-
 const DraftPreviewBubble: FC<{
   message: DraftPreviewMsg;
   onDecision: (decision: 'confirm' | 'cancel') => void;
 }> = ({ message, onDecision }) => {
+  const count = message.posts.length;
   return (
     <div className="flex gap-[12px] flex-row">
       <div className="w-[32px] h-[32px] rounded-[10px] bg-newBgLineColor flex-shrink-0 flex items-center justify-center text-textItemFocused">
         <AutopilotIcon size={16} />
       </div>
-      <div className="max-w-[80%] flex flex-col gap-[10px]">
-        <p className="text-[13px] text-textItemBlur">{formatPublishAt(message.publishAt)}</p>
+      <div className="max-w-[95%] md:max-w-[80%] flex flex-col gap-[10px]">
+        <p className="text-[13px] text-textItemBlur">
+          {count === 1 ? 'Ready to post' : `${count} posts ready to schedule`}
+        </p>
 
         {message.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -603,29 +778,47 @@ const DraftPreviewBubble: FC<{
           />
         )}
 
-        {message.drafts.map((draft) => (
-          <div
-            key={draft.platform}
-            className="rounded-[12px] bg-newBgLineColor text-newTextColor text-[14px] leading-[1.6] overflow-hidden"
-          >
-            <div className="px-[12px] py-[8px] border-b border-[rgba(255,255,255,0.07)] text-[12px] font-[600] text-textItemBlur uppercase tracking-wide">
-              {draft.platform}
-            </div>
-            <div className="px-[14px] py-[10px] whitespace-pre-wrap">{draft.content}</div>
-            {draft.hashtags && draft.hashtags.length > 0 && (
-              <div className="px-[14px] pb-[10px] flex flex-wrap gap-[6px]">
-                {draft.hashtags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-[12px] text-textItemBlur bg-[rgba(255,255,255,0.05)] rounded-[6px] px-[8px] py-[2px]"
-                  >
-                    #{tag}
-                  </span>
-                ))}
+        <div className="flex flex-col gap-[8px]">
+          {message.posts.map((post, i) => (
+            <div
+              key={i}
+              className="rounded-[12px] bg-newBgLineColor text-newTextColor text-[14px] leading-[1.6] overflow-hidden"
+            >
+              <div className="px-[12px] py-[8px] border-b border-[rgba(255,255,255,0.07)] flex items-center gap-[8px]">
+                <span className="text-[11px] font-[600] text-textItemBlur uppercase tracking-wide">
+                  {post.platform}
+                </span>
+                <span className="text-[11px] text-textItemBlur">·</span>
+                <span className="text-[11px] text-textItemBlur">
+                  {formatScheduledAt(post.scheduledAt)}
+                </span>
+                {count > 1 && (
+                  <>
+                    <span className="text-[11px] text-textItemBlur">·</span>
+                    <span className="text-[11px] text-textItemBlur italic truncate max-w-[120px]">
+                      {post.topic}
+                    </span>
+                  </>
+                )}
               </div>
-            )}
-          </div>
-        ))}
+              <div className="px-[14px] py-[10px] whitespace-pre-wrap">
+                {truncateText(post.content, 300)}
+              </div>
+              {post.hashtags && post.hashtags.length > 0 && (
+                <div className="px-[14px] pb-[10px] flex flex-wrap gap-[6px]">
+                  {post.hashtags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="text-[12px] text-textItemBlur bg-[rgba(255,255,255,0.05)] rounded-[6px] px-[8px] py-[2px]"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
 
         {!message.decided ? (
           <div className="flex gap-[8px]">
@@ -633,7 +826,7 @@ const DraftPreviewBubble: FC<{
               className="px-[14px] py-[7px] rounded-[8px] bg-boxFocused text-textItemFocused text-[13px] font-[600] hover:opacity-90 transition-opacity"
               onClick={() => onDecision('confirm')}
             >
-              Post it
+              {count === 1 ? 'Post it' : `Schedule all ${count}`}
             </button>
             <button
               className="px-[14px] py-[7px] rounded-[8px] bg-newBgLineColor text-textItemBlur text-[13px] hover:text-newTextColor transition-colors"
@@ -651,6 +844,161 @@ const DraftPreviewBubble: FC<{
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Scheduled list bubble (slice 1.3.g)
+// ---------------------------------------------------------------------------
+
+const ScheduledListBubble: FC<{
+  message: ScheduledListMsg;
+  onSendMessage: (text: string) => void;
+  onPrefillInput: (text: string) => void;
+}> = ({ message, onSendMessage, onPrefillInput }) => {
+  const [actedSlots, setActedSlots] = useState<Set<string>>(new Set());
+
+  const markActed = (slotId: string) =>
+    setActedSlots((prev) => new Set([...prev, slotId]));
+
+  if (message.posts.length === 0) {
+    return (
+      <div className="flex gap-[12px] flex-row">
+        <div className="w-[32px] h-[32px] rounded-[10px] bg-newBgLineColor flex-shrink-0 flex items-center justify-center text-textItemFocused">
+          <AutopilotIcon size={16} />
+        </div>
+        <div className="px-[14px] py-[10px] rounded-[12px] bg-newBgLineColor text-textItemBlur text-[14px] rounded-tl-[4px]">
+          Nothing scheduled.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-[12px] flex-row">
+      <div className="w-[32px] h-[32px] rounded-[10px] bg-newBgLineColor flex-shrink-0 flex items-center justify-center text-textItemFocused">
+        <AutopilotIcon size={16} />
+      </div>
+      <div className="max-w-[95%] md:max-w-[80%] flex flex-col gap-[8px]">
+        <p className="text-[12px] text-textItemBlur px-[2px]">
+          {message.posts.length} upcoming post{message.posts.length !== 1 ? 's' : ''}
+        </p>
+        {message.posts.map((post) => {
+          const acted = actedSlots.has(post.id);
+          return (
+            <div
+              key={post.id}
+              className={`rounded-[12px] bg-newBgLineColor overflow-hidden transition-opacity ${acted ? 'opacity-40' : ''}`}
+            >
+              <div className="px-[12px] py-[8px] border-b border-[rgba(255,255,255,0.07)] flex items-center gap-[8px]">
+                <span className="text-[11px] font-[600] text-textItemBlur uppercase tracking-wide">
+                  {post.platform}
+                </span>
+                <span className="text-[11px] text-textItemBlur">·</span>
+                <span className="text-[11px] text-textItemBlur">
+                  {formatScheduledAt(post.scheduledAt)}
+                </span>
+              </div>
+              <div className="px-[14px] py-[10px] text-[14px] text-newTextColor leading-[1.5]">
+                {truncateText(post.content, 120)}
+              </div>
+              {!acted && (
+                <div className="px-[12px] pb-[10px] flex gap-[6px]">
+                  <button
+                    className="px-[10px] py-[5px] rounded-[6px] bg-[rgba(255,255,255,0.06)] text-[12px] text-textItemBlur hover:text-newTextColor transition-colors"
+                    onClick={() => {
+                      markActed(post.id);
+                      onPrefillInput(`Reschedule slot ${post.id} to `);
+                    }}
+                  >
+                    Reschedule
+                  </button>
+                  <button
+                    className="px-[10px] py-[5px] rounded-[6px] bg-[rgba(255,255,255,0.06)] text-[12px] text-red-400 hover:text-red-300 transition-colors"
+                    onClick={() => {
+                      markActed(post.id);
+                      onSendMessage(`Cancel slot ${post.id}`);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {acted && (
+                <div className="px-[14px] pb-[10px] text-[12px] text-textItemBlur">
+                  Action sent…
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Action result bubble (slice 1.3.g)
+// ---------------------------------------------------------------------------
+
+const ActionResultBubble: FC<{ message: ActionResultMsg }> = ({ message }) => (
+  <div className="flex gap-[12px] flex-row">
+    <div
+      className={`w-[32px] h-[32px] rounded-[10px] flex-shrink-0 flex items-center justify-center ${
+        message.ok
+          ? 'bg-newBgLineColor text-green-400'
+          : 'bg-newBgLineColor text-red-400'
+      }`}
+    >
+      {message.ok ? <CheckIcon /> : <XIcon />}
+    </div>
+    <div
+      className={`max-w-[70%] px-[14px] py-[10px] rounded-[12px] bg-newBgLineColor text-[14px] leading-[1.6] rounded-tl-[4px] ${
+        message.ok ? 'text-newTextColor' : 'text-red-400'
+      }`}
+    >
+      {message.message}
+    </div>
+  </div>
+);
+
+// ---------------------------------------------------------------------------
+// Confirm bubble (slice 1.3.g — future management flows)
+// ---------------------------------------------------------------------------
+
+const ConfirmBubble: FC<{
+  message: ConfirmMsg;
+  onDecision: (decision: 'confirm' | 'cancel') => void;
+}> = ({ message, onDecision }) => (
+  <div className="flex gap-[12px] flex-row">
+    <div className="w-[32px] h-[32px] rounded-[10px] bg-newBgLineColor flex-shrink-0 flex items-center justify-center text-textItemFocused">
+      <AutopilotIcon size={16} />
+    </div>
+    <div className="max-w-[95%] md:max-w-[75%] flex flex-col gap-[10px]">
+      <div className="px-[14px] py-[10px] rounded-[12px] bg-newBgLineColor text-newTextColor text-[14px] leading-[1.6] rounded-tl-[4px]">
+        {message.description}
+      </div>
+      {!message.decided ? (
+        <div className="flex gap-[8px]">
+          <button
+            className="px-[14px] py-[7px] rounded-[8px] bg-boxFocused text-textItemFocused text-[13px] font-[600] hover:opacity-90 transition-opacity"
+            onClick={() => onDecision('confirm')}
+          >
+            {message.confirmLabel}
+          </button>
+          <button
+            className="px-[14px] py-[7px] rounded-[8px] bg-newBgLineColor text-textItemBlur text-[13px] hover:text-newTextColor transition-colors"
+            onClick={() => onDecision('cancel')}
+          >
+            {message.cancelLabel}
+          </button>
+        </div>
+      ) : (
+        <p className="text-[12px] text-textItemBlur">
+          {message.resultMessage ?? 'Processing…'}
+        </p>
+      )}
+    </div>
+  </div>
+);
 
 // ---------------------------------------------------------------------------
 // Error bubble
@@ -890,6 +1238,42 @@ const WarningIcon: FC = () => (
       d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
       stroke="currentColor"
       strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const CheckIcon: FC = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+  >
+    <path
+      d="M20 6 9 17l-5-5"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const XIcon: FC = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+  >
+    <path
+      d="M18 6 6 18M6 6l12 12"
+      stroke="currentColor"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />

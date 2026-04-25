@@ -14,6 +14,14 @@ jest.mock('ai-v5', () => ({
   generateText: jest.fn(),
 }));
 
+// The analytics_snapshot skill transitively imports socialIntegrationList which
+// pulls in social.abstract.ts → concurrency.service.ts (a file with a TS error
+// under noImplicitReturns). Mock the skill to break that import chain so
+// ts-jest can compile this spec without touching the integration stack.
+jest.mock('../skills/analytics_snapshot', () => ({
+  handleAnalyticsSnapshot: jest.fn(),
+}));
+
 import { generateText } from 'ai-v5';
 import type { LanguageModel } from 'ai-v5';
 import {
@@ -89,6 +97,10 @@ function makeDeps(overrides: {
     directAction: {
       startFlow,
       cancelAction,
+    } as any,
+    cadenceConfig: {
+      pause: jest.fn().mockResolvedValue(undefined),
+      resume: jest.fn().mockResolvedValue(undefined),
     } as any,
   };
 
@@ -220,7 +232,7 @@ describe('runOrchestrator — text-only response', () => {
     expect(args.model).toBe(deps.llm.model);
     expect(args.stopWhen).toBeDefined();
     // We can't introspect the StopCondition cleanly; just assert it's set.
-    expect(ORCHESTRATOR_MAX_STEPS).toBe(5);
+    expect(ORCHESTRATOR_MAX_STEPS).toBe(8);
   });
 });
 
@@ -228,14 +240,13 @@ describe('runOrchestrator — tool dispatch', () => {
   test('drives schedule_post → suppresses final text echo when tool emitted', async () => {
     const { deps, emitted } = makeDeps({
       pendingAction: {
-        collectedData: { topic: 'launch', platforms: ['twitter'] },
+        collectedData: { topics: ['launch'], platforms: ['twitter'] },
       },
       startFlowEmits: [
         {
           type: 'draft_preview',
           pendingActionId: 'pa-1',
-          drafts: [{ platform: 'twitter', content: 'Launch!' }],
-          publishAt: '2026-04-23T20:05:00.000Z',
+          posts: [{ topic: 'launch', platform: 'twitter', content: 'Launch!', scheduledAt: '2026-04-23T20:05:00.000Z' }],
         },
       ],
     });
@@ -243,7 +254,7 @@ describe('runOrchestrator — tool dispatch', () => {
     mockGenerateText.mockImplementation(async (args: any) => {
       // Simulate the model picking schedule_post with the parsed phrase.
       const observation = await args.tools.schedule_post.execute(
-        { when: 'after 5 minutes' },
+        { topics: ['launch'], startTime: 'after 5 minutes' },
         { toolCallId: 't1', messages: [] },
       );
       // After seeing the observation, the model produces a stub text reply
@@ -324,8 +335,7 @@ describe('runOrchestrator — tool dispatch', () => {
         {
           type: 'draft_preview',
           pendingActionId: 'pa-2',
-          drafts: [{ platform: 'twitter', content: 'New' }],
-          publishAt: '2026-04-23T20:10:00.000Z',
+          posts: [{ topic: 'new feature', platform: 'twitter', content: 'New', scheduledAt: '2026-04-23T20:10:00.000Z' }],
         },
       ],
     });
@@ -336,7 +346,7 @@ describe('runOrchestrator — tool dispatch', () => {
         { toolCallId: 't1', messages: [] },
       );
       await args.tools.schedule_post.execute(
-        { topic: 'new feature', when: 'in 10 minutes' },
+        { topics: ['new feature'], startTime: 'in 10 minutes' },
         { toolCallId: 't2', messages: [] },
       );
       return { text: '' } as any;
@@ -357,7 +367,7 @@ describe('runOrchestrator — state snapshot integration', () => {
   test('renders pending action into <state> fence so the LLM sees it', async () => {
     const { deps } = makeDeps({
       pendingAction: {
-        collectedData: { topic: 'launch', platforms: ['twitter'] },
+        collectedData: { topics: ['launch'], platforms: ['twitter'] },
       },
     });
     mockGenerateText.mockResolvedValue({ text: 'ok' } as any);

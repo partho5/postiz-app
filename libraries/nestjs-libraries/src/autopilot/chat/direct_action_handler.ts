@@ -1,48 +1,67 @@
 /**
- * DirectActionHandler — multi-turn post creation flow (slice 5.x)
+ * DirectActionHandler — multi-turn post creation flow
  *
- * State machine via ap_pending_action.waitingFor:
- *   'platforms'     — ask which social platforms to post to
- *   'timing'        — ask when to post (now vs. specific time)
- *   'image_consent' — ask if the user wants an AI-generated image
- *   'approval'      — show draft preview, await Post it / Cancel
+ * State machine via ap_pending_action.waitingFor (3 states):
+ *   'platforms' — ask which social platforms to post to
+ *   'timing'    — ask when to post (startTime + optional intervalMinutes)
+ *   'approval'  — show draft preview for all posts, await confirm / cancel
  *
- * On approval: create ApPostCandidate rows + ApScheduledSlot per platform
- * so the existing pop-and-publish cron picks them up automatically.
+ * On approval:
+ *   - push() each post to ap_post_candidate (the stack) at priority 100
+ *   - create a bare ap_scheduled_slot per post (postCandidateId = null)
+ *   - the TriggerDueSlots cron pops from the stack when each slot fires
+ *
+ * No hardcoded post+time pairing. The stack and slots are fully decoupled.
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import { generateObject, generateText } from 'ai-v5';
+import { generateObject } from 'ai-v5';
 import { z } from 'zod';
 import { Organization, User } from '@prisma/client';
 import { PrismaService } from '@gitroom/nestjs-libraries/database/prisma/prisma.service';
 import type { LlmProvider } from '../skills/types';
 import type { DirectActionData } from '../agents/intent_parser';
 import { runCopywriter } from '../agents/copywriter';
-import { isImageGenAvailable, generateImage } from '../image-gen';
+import { push } from '../stack';
+import { parseTimeExpression } from '../time/parse';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+export interface PostEntry {
+  topic: string;
+  platform: string;
+  content: string;
+  hashtags?: string[];
+  mediaUrl?: string;
+}
+
 interface CollectedData {
-  topic?: string;
+  topics?: string[];
   content?: string;
   platforms?: string[];
-  publishImmediately?: boolean;
-  scheduleAt?: string;
-  countPerPlatform?: number;
+  startTime?: string;
+  immediate?: boolean;
+  intervalMinutes?: number;
   wantsImage?: boolean;
   imageUrl?: string;
-  drafts?: Array<{ platform: string; content: string; hashtags?: string[] }>;
+  postStack?: PostEntry[];
+  times?: string[];
 }
 
 export type ChatDraftPreviewEvent = {
   type: 'draft_preview';
   pendingActionId: string;
-  drafts: Array<{ platform: string; content: string; hashtags?: string[] }>;
+  posts: Array<{
+    topic: string;
+    platform: string;
+    content: string;
+    hashtags?: string[];
+    scheduledAt: string;
+    mediaUrl?: string;
+  }>;
   imageUrl?: string;
-  publishAt: string;
 };
 
 export type ChatTextChunk = { type: 'text'; chunk: string };
@@ -61,8 +80,8 @@ export class DirectActionHandler {
   constructor(private readonly _prisma: PrismaService) {}
 
   /**
-   * Entry point when intent = direct_action and no existing pending action.
-   * Returns the assistant's reply text (empty string if draft_preview was emitted).
+   * Entry point: start a new post-creation flow from a DirectActionData object.
+   * Called by the schedule_post orchestrator tool.
    */
   async startFlow(
     org: Organization,
@@ -73,28 +92,15 @@ export class DirectActionHandler {
   ): Promise<string> {
     const availablePlatforms = await this._getAvailablePlatforms(org.id);
 
-    // Normalize timing: accept publishImmediately=true as-is;
-    // for scheduleAt, only keep it if it parses as a valid future ISO date.
-    // Anything else → leave both undefined so the state machine asks.
-    const publishImmediately: boolean | undefined =
-      directAction.publishImmediately === true ? true : undefined;
-    let scheduleAt: string | undefined;
-    if (!publishImmediately && directAction.scheduleAt) {
-      const d = new Date(directAction.scheduleAt);
-      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) {
-        scheduleAt = d.toISOString();
-      }
-    }
-
     const collected: CollectedData = {
-      topic: directAction.topic,
+      topics: directAction.topics?.length ? directAction.topics : undefined,
       content: directAction.content,
       platforms: directAction.platforms?.length
         ? this._matchPlatforms(directAction.platforms, availablePlatforms)
         : undefined,
-      publishImmediately,
-      scheduleAt,
-      countPerPlatform: directAction.countPerPlatform ?? 1,
+      startTime: directAction.immediate ? undefined : directAction.startTime,
+      immediate: directAction.immediate,
+      intervalMinutes: directAction.intervalMinutes,
       wantsImage: directAction.wantsImage,
     };
 
@@ -102,9 +108,8 @@ export class DirectActionHandler {
   }
 
   /**
-   * Entry point when a pending action already exists for this tenant.
-   * Parses the user message in the context of the current state and advances.
-   * Returns the assistant's reply text.
+   * Entry point: resume a pending flow when the user answers a question.
+   * Called by the orchestrator when a pending action exists.
    */
   async continuePending(
     org: Organization,
@@ -120,30 +125,20 @@ export class DirectActionHandler {
 
     switch (waitingFor) {
       case 'platforms': {
-        const parsed = await this._parsePlatforms(
-          userMessage,
-          availablePlatforms,
-          llm,
-        );
+        const parsed = await this._parsePlatforms(userMessage, availablePlatforms, llm);
         collected.platforms = parsed.length ? parsed : availablePlatforms.slice(0, 1);
         break;
       }
       case 'timing': {
         const timing = await this._parseTiming(userMessage, llm);
-        collected.publishImmediately = timing.immediately;
-        if (!timing.immediately && timing.scheduleAt) {
-          collected.scheduleAt = timing.scheduleAt;
-        }
-        break;
-      }
-      case 'image_consent': {
-        collected.wantsImage = await this._parseYesNo(userMessage, llm);
+        collected.immediate = timing.immediate;
+        collected.startTime = timing.startTime;
+        collected.intervalMinutes = timing.intervalMinutes;
         break;
       }
       case 'approval': {
-        // Treat any freeform message in approval state as cancel.
         await this._deletePendingAction(org.id);
-        const msg = "Post cancelled.";
+        const msg = 'Post cancelled.';
         emit({ type: 'text', chunk: msg });
         return msg;
       }
@@ -153,7 +148,8 @@ export class DirectActionHandler {
   }
 
   /**
-   * Called from the HTTP confirm endpoint after user clicks "Post it".
+   * Confirm a pending approval — push posts to stack, create bare slots.
+   * Called from the HTTP confirm endpoint.
    */
   async confirmApproval(
     orgId: string,
@@ -164,49 +160,42 @@ export class DirectActionHandler {
     });
 
     if (!row) {
-      return { ok: false, message: 'No pending post found — it may have already been posted or cancelled.' };
+      return {
+        ok: false,
+        message: 'No pending post found — it may have already been posted or cancelled.',
+      };
     }
 
     const collected = row.collectedData as CollectedData;
-    const drafts = collected.drafts ?? [];
-    const platforms = collected.platforms ?? [];
+    const postStack = collected.postStack ?? [];
+    const times = collected.times ?? [];
 
-    if (drafts.length === 0 || platforms.length === 0) {
+    if (postStack.length === 0) {
       return { ok: false, message: 'Draft data missing — please try again.' };
     }
 
-    // Resolve publish time.
-    const publishAt = collected.publishImmediately
-      ? new Date()
-      : this._parseIsoDate(collected.scheduleAt) ?? new Date();
-
-    const immediateOrNear = publishAt.getTime() <= Date.now() + 5 * 60_000;
-    const candidatePriority = immediateOrNear ? 999 : 100;
-
-    for (const draft of drafts) {
-      // Create a post candidate on the stack.
-      const candidate = await this._prisma.apPostCandidate.create({
-        data: {
-          organizationId: orgId,
-          platform: draft.platform,
-          content: draft.content,
-          contentVariants: {},
-          mediaUrls: collected.imageUrl ? [collected.imageUrl] : [],
-          status: 'PENDING',
-          priority: candidatePriority,
-          source: 'chat_direct_action',
-          metadata: { hashtags: draft.hashtags ?? [] },
+    // Push each post to the candidate stack (decoupled from slots).
+    for (const post of postStack) {
+      await push(this._prisma as any, orgId, post.platform, post.content, {
+        priority: 100,
+        source: 'chat_direct_action',
+        metadata: {
+          hashtags: post.hashtags ?? [],
+          ...(post.mediaUrl ? { mediaUrl: post.mediaUrl } : {}),
+          ...(collected.imageUrl ? { imageUrl: collected.imageUrl } : {}),
         },
       });
+    }
 
-      // Create a scheduled slot for this platform.
+    // Create bare scheduled slots — no postCandidateId, cron fills at fire time.
+    for (let i = 0; i < postStack.length; i++) {
+      const scheduledAt = times[i] ? new Date(times[i]) : new Date();
       await this._prisma.apScheduledSlot.create({
         data: {
           organizationId: orgId,
-          platform: draft.platform,
-          scheduledAt: publishAt,
+          platform: postStack[i].platform,
+          scheduledAt,
           status: 'PENDING',
-          postCandidateId: candidate.id,
           metadata: { source: 'chat_direct_action' },
         },
       });
@@ -214,19 +203,25 @@ export class DirectActionHandler {
 
     await this._deletePendingAction(orgId);
 
-    const timeLabel = immediateOrNear
+    const count = postStack.length;
+    const firstTime = times[0] ? new Date(times[0]) : new Date();
+    const timeLabel = firstTime.getTime() <= Date.now() + 5 * 60_000
       ? 'now'
-      : publishAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      : firstTime.toLocaleString('en-US', {
+          weekday: 'short', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit',
+        });
+
     return {
       ok: true,
-      message: drafts.length > 1
-        ? `Queued ${drafts.length} posts — going out ${timeLabel}.`
-        : `Queued — going out ${timeLabel}.`,
+      message: count === 1
+        ? `Queued — going out ${timeLabel}.`
+        : `Queued ${count} posts — first going out ${timeLabel}.`,
     };
   }
 
   /**
-   * Cancel whatever is pending for this org.
+   * Cancel whatever pending action is active for this org.
    */
   async cancelAction(orgId: string): Promise<void> {
     await this._deletePendingAction(orgId);
@@ -244,11 +239,12 @@ export class DirectActionHandler {
     emit: (event: EmitEvent) => void,
     existingActionId: string | null,
   ): Promise<string> {
+
     // Step 1: Platforms.
     if (!collected.platforms?.length) {
       if (availablePlatforms.length === 0) {
         await this._deletePendingAction(org.id);
-        const msg = "No social accounts connected. Add one in Settings first.";
+        const msg = 'No social accounts connected. Add one in Settings first.';
         emit({ type: 'text', chunk: msg });
         return msg;
       }
@@ -264,79 +260,35 @@ export class DirectActionHandler {
     }
 
     // Step 2: Timing.
-    if (collected.publishImmediately === undefined && !collected.scheduleAt) {
+    if (!collected.immediate && !collected.startTime) {
       await this._upsert(org.id, collected, 'timing', existingActionId);
-      const msg = 'Post now or schedule it? (e.g. "now", "tomorrow 9am", "Friday 3pm")';
+      const msg = 'Post now or schedule it? (e.g. "now", "tomorrow 9am", "every hour from next hour")';
       emit({ type: 'text', chunk: msg });
       return msg;
     }
 
-    // Step 3: Image consent (only if image gen is configured).
-    if (collected.wantsImage === undefined) {
-      let imageAvailable = false;
-      try {
-        imageAvailable = await isImageGenAvailable(this._prisma, org.id);
-      } catch {
-        // ignore
-      }
-      if (imageAvailable) {
-        await this._upsert(org.id, collected, 'image_consent', existingActionId);
-        const msg = 'Add an AI-generated image?';
-        emit({ type: 'text', chunk: msg });
-        return msg;
-      }
-      collected.wantsImage = false;
-    }
-
-    // Step 4: Generate draft(s) and show preview.
-    const platformList = (collected.platforms ?? []).join(', ');
-    emit({ type: 'status', message: `Writing your ${platformList} post…` });
-
-    const drafts = await this._generateDrafts(org, collected, llm);
-    collected.drafts = drafts;
-
-    if (collected.wantsImage && collected.topic) {
-      emit({ type: 'status', message: 'Generating image…' });
-      try {
-        collected.imageUrl = await generateImage(
-          this._prisma,
-          org.id,
-          collected.topic,
-        );
-      } catch (err) {
-        this.logger.warn(`Image generation skipped: ${err}`);
-      }
-    }
-
-    const actionId = await this._upsert(org.id, collected, 'approval', existingActionId);
-
-    const publishAt = collected.publishImmediately
-      ? 'now'
-      : (collected.scheduleAt ?? 'now');
-
-    emit({
-      type: 'draft_preview',
-      pendingActionId: actionId,
-      drafts,
-      imageUrl: collected.imageUrl,
-      publishAt,
-    });
-
-    return '';
-  }
-
-  // ---------------------------------------------------------------------------
-  // Draft generation
-  // ---------------------------------------------------------------------------
-
-  private async _generateDrafts(
-    org: Organization,
-    collected: CollectedData,
-    llm: LlmProvider,
-  ): Promise<Array<{ platform: string; content: string; hashtags?: string[] }>> {
+    // Step 3: Generate drafts and show preview.
+    const topics = collected.topics?.length ? collected.topics : ['a social media post'];
     const platforms = collected.platforms ?? [];
-    const topic = collected.topic ?? 'a social media post';
-    const count = collected.countPerPlatform ?? 1;
+    const intervalMs = (collected.intervalMinutes ?? 60) * 60_000;
+
+    // Resolve start time.
+    let startMs: number;
+    if (collected.immediate) {
+      startMs = Date.now();
+    } else {
+      const parsed = parseTimeExpression(collected.startTime!, {
+        now: new Date(),
+        forwardOnly: true,
+      });
+      startMs = parsed && !parsed.isPast ? parsed.date.getTime() : Date.now();
+    }
+
+    const platformLabel = platforms.join(', ');
+    emit({
+      type: 'status',
+      message: `Writing ${topics.length > 1 ? `${topics.length} posts` : 'your post'} for ${platformLabel}…`,
+    });
 
     const agentCtx = {
       tenant: org,
@@ -351,30 +303,61 @@ export class DirectActionHandler {
       },
     };
 
-    const results: Array<{ platform: string; content: string; hashtags?: string[] }> = [];
+    const postStack: PostEntry[] = [];
+    const times: string[] = [];
 
-    for (const platform of platforms) {
-      try {
-        const output = await runCopywriter(agentCtx, {
-          platform,
-          topic: collected.content ?? topic,
-          count,
-        });
-        const best = output.drafts[0];
-        if (best) {
-          results.push({
+    // One slot per topic; all platforms share that slot time.
+    let slotIndex = 0;
+    for (const topic of topics) {
+      const scheduledAt = new Date(startMs + slotIndex * intervalMs).toISOString();
+
+      for (const platform of platforms) {
+        const postText = collected.content ?? topic;
+        let content = postText;
+        let hashtags: string[] | undefined;
+
+        try {
+          const output = await runCopywriter(agentCtx, {
             platform,
-            content: best.content,
-            hashtags: best.hashtags,
+            topic: postText,
+            count: 1,
           });
+          const draft = output.drafts[0];
+          if (draft) {
+            content = draft.content;
+            hashtags = draft.hashtags;
+          }
+        } catch (err) {
+          this.logger.error(`Copywriter failed for "${topic}" on ${platform}: ${err}`);
         }
-      } catch (err) {
-        this.logger.error(`Copywriter failed for ${platform}: ${err}`);
-        results.push({ platform, content: collected.content ?? topic });
+
+        postStack.push({ topic, platform, content, hashtags });
+        times.push(scheduledAt);
       }
+
+      slotIndex++;
     }
 
-    return results;
+    collected.postStack = postStack;
+    collected.times = times;
+
+    const actionId = await this._upsert(org.id, collected, 'approval', existingActionId);
+
+    emit({
+      type: 'draft_preview',
+      pendingActionId: actionId,
+      posts: postStack.map((p, i) => ({
+        topic: p.topic,
+        platform: p.platform,
+        content: p.content,
+        hashtags: p.hashtags,
+        scheduledAt: times[i],
+        mediaUrl: p.mediaUrl,
+      })),
+      imageUrl: collected.imageUrl,
+    });
+
+    return '';
   }
 
   // ---------------------------------------------------------------------------
@@ -391,13 +374,10 @@ export class DirectActionHandler {
     const { object } = await generateObject({
       model: llm.model,
       schema: z.object({
-        platforms: z
-          .array(z.string())
-          .describe('Platform slugs the user wants to post to'),
+        platforms: z.array(z.string()).describe('Platform slugs the user wants to post to'),
       }),
-      prompt: `Available platforms: ${available.join(', ')}.\nUser said: "${message}"\nReturn the matching platform slugs (lowercase, no spaces). If user says "all" or "everywhere" return all available. If unclear, return all.`,
-      system:
-        'Extract which social media platforms the user wants to post to. Return only slugs from the available list.',
+      prompt: `Available platforms: ${available.join(', ')}.\nUser said: "${message}"\nReturn the matching platform slugs (lowercase). If unclear, return all.`,
+      system: 'Extract which social media platforms the user wants to post to.',
     }).catch(() => ({ object: { platforms: available } }));
 
     const matched = object.platforms
@@ -409,40 +389,23 @@ export class DirectActionHandler {
   private async _parseTiming(
     message: string,
     llm: LlmProvider,
-  ): Promise<{ immediately: boolean; scheduleAt?: string }> {
-    const nowIso = new Date().toISOString();
-
-    const fallback = { immediately: true as const };
-
+  ): Promise<{ immediate: boolean; startTime?: string; intervalMinutes?: number }> {
     const { object } = await generateObject({
       model: llm.model,
       schema: z.object({
-        immediately: z.boolean().describe('true if user wants to post right now'),
-        scheduleAt: z
-          .string()
-          .optional()
-          .describe('ISO 8601 datetime when user wants to post (only if not immediately)'),
+        immediate: z.boolean().describe('true if user wants to post right now'),
+        startTime: z.string().optional().describe('Natural-language time phrase for the first post (pass verbatim)'),
+        intervalMinutes: z.number().int().optional().describe('Minutes between posts if this is a series'),
       }),
-      prompt: `Current UTC time: ${nowIso}\nUser said: "${message}"\nExtract posting timing.`,
-      system:
-        'Determine when the user wants to post. If they say "now", "immediately", "right now", "asap" → immediately=true. Otherwise parse the time and return ISO 8601. When in doubt, default to immediately=true.',
-    }).catch(() => ({ object: fallback }));
+      prompt: `User said: "${message}"\nExtract posting timing. If they say "every hour from next hour" → immediate=false, startTime="next hour", intervalMinutes=60.`,
+      system: 'Determine when the user wants to post. "now"/"asap" → immediate=true. Otherwise extract startTime verbatim and intervalMinutes if it is a series.',
+    }).catch(() => ({ object: { immediate: true } }));
 
-    return { immediately: object.immediately ?? true, scheduleAt: (object as { scheduleAt?: string }).scheduleAt };
-  }
-
-  private async _parseYesNo(message: string, llm: LlmProvider): Promise<boolean> {
-    const { object } = await generateObject({
-      model: llm.model,
-      schema: z.object({
-        yes: z.boolean().describe('true if user agrees / says yes'),
-      }),
-      prompt: `User said: "${message}". Did they say yes or agree?`,
-      system:
-        'Determine if the user said yes. "yes", "sure", "go ahead", "ok", "yep", "please" → yes. "no", "skip", "nope", "don\'t" → no.',
-    }).catch(() => ({ object: { yes: false } }));
-
-    return object.yes;
+    return {
+      immediate: object.immediate ?? false,
+      startTime: (object as { startTime?: string }).startTime,
+      intervalMinutes: (object as { intervalMinutes?: number }).intervalMinutes,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -451,12 +414,7 @@ export class DirectActionHandler {
 
   private async _getAvailablePlatforms(orgId: string): Promise<string[]> {
     const integrations = await this._prisma.integration.findMany({
-      where: {
-        organizationId: orgId,
-        disabled: false,
-        refreshNeeded: false,
-        deletedAt: null,
-      },
+      where: { organizationId: orgId, disabled: false, refreshNeeded: false, deletedAt: null },
       select: { providerIdentifier: true },
     });
     return [...new Set(integrations.map((i) => i.providerIdentifier))];
@@ -464,10 +422,9 @@ export class DirectActionHandler {
 
   private _matchPlatforms(requested: string[], available: string[]): string[] {
     const availLower = available.map((a) => a.toLowerCase());
-    const matched = requested
+    return requested
       .map((r) => r.toLowerCase())
       .filter((r) => availLower.includes(r));
-    return matched.length > 0 ? matched : [];
   }
 
   // ---------------------------------------------------------------------------
@@ -480,7 +437,7 @@ export class DirectActionHandler {
     waitingFor: string,
     existingId: string | null,
   ): Promise<string> {
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 min TTL
+    const expiresAt = new Date(Date.now() + 30 * 60_000);
 
     if (existingId) {
       await this._prisma.apPendingAction.update({
@@ -515,14 +472,6 @@ export class DirectActionHandler {
   }
 
   private async _deletePendingAction(orgId: string): Promise<void> {
-    await this._prisma.apPendingAction.deleteMany({
-      where: { organizationId: orgId },
-    });
-  }
-
-  private _parseIsoDate(value?: string): Date | null {
-    if (!value) return null;
-    const d = new Date(value);
-    return isNaN(d.getTime()) ? null : d;
+    await this._prisma.apPendingAction.deleteMany({ where: { organizationId: orgId } });
   }
 }

@@ -46,11 +46,11 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Hard ceiling on tool-call rounds inside one user turn. Five is enough
- * for cancel→schedule chains; beyond that the model is almost certainly
- * looping. Keep small — the stop condition is the budget guard.
+ * Hard ceiling on tool-call rounds inside one user turn. Eight covers
+ * complex multi-tool flows (e.g. list → cancel → reschedule → confirm)
+ * without letting a misbehaving model burn budget.
  */
-export const ORCHESTRATOR_MAX_STEPS = 5;
+export const ORCHESTRATOR_MAX_STEPS = 8;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -110,7 +110,20 @@ RULES:
 3. If the user clearly abandons the current draft ("cancel", "never mind", "forget it") OR pivots to a brand-new request while a draft is pending, call cancel_pending_draft first.
 4. For "what's scheduled", "show my queue", "list upcoming" → call list_scheduled_posts.
 5. After schedule_post emits a draft_preview, your turn is OVER. Do NOT call further tools and do NOT add a text reply — the preview is the reply.
-6. Time expressions (e.g. "after 5 minutes", "tomorrow 9am") go to schedule_post as the \`when\` argument verbatim. The tool resolves them deterministically — do NOT pre-convert them to ISO yourself.`;
+6. Time expressions (e.g. "after 5 minutes", "tomorrow 9am", "next hour") go to schedule_post as the \`startTime\` argument verbatim. Do NOT pre-convert to ISO yourself. The tool resolves them deterministically.
+7. If the user asks what you can do, what your capabilities are, whether a feature exists, or how any feature works → call search_knowledge first. Do NOT answer from general knowledge — the knowledge base is the authoritative source. If search_knowledge returns no results, say you are not sure rather than guessing.
+
+ARRAY-FIRST RULES — read carefully, these are critical:
+8. schedule_post ALWAYS takes \`topics: string[]\` — even for a single post. NEVER use a scalar topic.
+   • One post:   topics: ["my topic"]
+   • Series of 7 posts spaced 60 min apart:
+       topics: ["topic1","topic2","topic3","topic4","topic5","topic6","topic7"],
+       startTime: "next hour", intervalMinutes: 60
+   • There is NO create_post_series tool. schedule_post handles every count.
+9. cancel_scheduled_post takes \`slotIds: string[]\`. Pass ALL ids in one call: slotIds: ["id1","id2","id3"]. Never call it in a loop.
+10. reschedule_post takes \`slotIds: string[]\` and \`times: string[]\` as PARALLEL arrays of EQUAL length. slotIds[i] is rescheduled to times[i]. They MUST be the same length — validate before calling.
+11. pause_posting takes \`platforms: string[]\`. Omit to pause ALL connected platforms.
+12. resume_posting takes \`platforms: string[]\`. Omit to resume ALL currently-paused platforms.`;
 
 /**
  * Compose the full system prompt: role + style + state-snapshot fence.
@@ -196,7 +209,10 @@ export async function runOrchestrator(
   const system = buildSystemPrompt(stateBlock);
 
   // 2. Tools.
-  const registry = buildOrchestratorTools({ directAction: deps.directAction });
+  const registry = buildOrchestratorTools({
+    directAction: deps.directAction,
+    cadenceConfig: deps.cadenceConfig,
+  });
   const trace: { name: string; result: OrchestratorToolResult<unknown> }[] = [];
   const tools = adaptToolsForAiSdk(ctx, registry, trace);
 

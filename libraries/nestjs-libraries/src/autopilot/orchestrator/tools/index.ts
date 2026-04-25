@@ -1,43 +1,69 @@
 /**
- * Orchestrator tool registry — slice 1.3.c
+ * Orchestrator tool registry — slice 1.3.c (starter) + 1.3.d (management)
+ *                              + 1.3.e (insight) + 1.3.f (profile/memory)
  *
- * Each starter tool is built via a factory so its dependencies (e.g.
- * `DirectActionHandler`) can be injected explicitly without bloating
- * `OrchestratorContext`. `buildOrchestratorTools` returns the array the
- * orchestrator agent passes to `generateText({ tools: ... })`.
- *
- * Slices 1.3.d–f will add more tools here. For each new tool:
- *   1. Create `orchestrator/tools/<name>.ts` exporting `create<Name>Tool`.
- *   2. Add it to the `OrchestratorToolDeps` type below if it needs any
- *      service injection.
- *   3. Register it in `buildOrchestratorTools`.
+ * Each tool is built via a factory so its dependencies can be injected
+ * explicitly without bloating `OrchestratorContext`. `buildOrchestratorTools`
+ * returns the array the orchestrator agent passes to `generateText({ tools })`.
  */
 
 import type { DirectActionHandler } from '../../chat/direct_action_handler';
+import type { CadenceConfigService } from '../../stack/cadence-config.service';
 import type { OrchestratorTool } from '../types';
 
 import { createSchedulePostTool } from './schedule_post';
 import { createListScheduledPostsTool } from './list_scheduled_posts';
 import { createCancelPendingDraftTool } from './cancel_pending_draft';
 import { createClarifyWithUserTool } from './clarify_with_user';
+import { createCancelScheduledPostTool } from './cancel_scheduled_post';
+import { createReschedulePostTool } from './reschedule_post';
+import { createPausePostingTool } from './pause_posting';
+import { createResumePostingTool } from './resume_posting';
+import { createRollbackPublishedPostTool } from './rollback_published_post';
+import { createAnalyticsSnapshotTool } from './analytics_snapshot';
+import { createResearchTopicTool } from './research_topic';
+import { createScrapeCompetitorTool } from './scrape_competitor';
+import { createGetProfileTool } from './get_profile';
+import { createUpdateBusinessProfileTool } from './update_business_profile';
+import { createSetStrategyOptoutTool } from './set_strategy_optout';
+import { createSaveMemoryTool } from './save_memory';
+import { createRecallMemoryTool } from './recall_memory';
+import { createGetOlderHistoryTool } from './get_older_history';
+import { createSearchKnowledgeTool } from './search_knowledge';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
+  cadenceConfig: CadenceConfigService;
 }
 
 export function buildOrchestratorTools(
   deps: OrchestratorToolDeps,
 ): OrchestratorTool<unknown, unknown>[] {
   return [
-    createSchedulePostTool({ directAction: deps.directAction }) as OrchestratorTool<
-      unknown,
-      unknown
-    >,
+    // ── Slice 1.3.c — starter tools ──────────────────────────────────────
+    createSchedulePostTool({ directAction: deps.directAction }) as OrchestratorTool<unknown, unknown>,
     createListScheduledPostsTool() as OrchestratorTool<unknown, unknown>,
-    createCancelPendingDraftTool({
-      directAction: deps.directAction,
-    }) as OrchestratorTool<unknown, unknown>,
+    createCancelPendingDraftTool({ directAction: deps.directAction }) as OrchestratorTool<unknown, unknown>,
     createClarifyWithUserTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice 1.3.d — management tools ───────────────────────────────────
+    createCancelScheduledPostTool() as OrchestratorTool<unknown, unknown>,
+    createReschedulePostTool() as OrchestratorTool<unknown, unknown>,
+    createPausePostingTool({ cadenceConfig: deps.cadenceConfig }) as OrchestratorTool<unknown, unknown>,
+    createResumePostingTool({ cadenceConfig: deps.cadenceConfig }) as OrchestratorTool<unknown, unknown>,
+    createRollbackPublishedPostTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice 1.3.e — insight tools ──────────────────────────────────────
+    createAnalyticsSnapshotTool() as OrchestratorTool<unknown, unknown>,
+    createResearchTopicTool() as OrchestratorTool<unknown, unknown>,
+    createScrapeCompetitorTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice 1.3.f — profile/memory tools ───────────────────────────────
+    createGetProfileTool() as OrchestratorTool<unknown, unknown>,
+    createUpdateBusinessProfileTool() as OrchestratorTool<unknown, unknown>,
+    createSetStrategyOptoutTool() as OrchestratorTool<unknown, unknown>,
+    createSaveMemoryTool() as OrchestratorTool<unknown, unknown>,
+    createRecallMemoryTool() as OrchestratorTool<unknown, unknown>,
+    createGetOlderHistoryTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice 1.3.g — knowledge base search ──────────────────────────────────
+    createSearchKnowledgeTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -46,4 +72,19 @@ export {
   createListScheduledPostsTool,
   createCancelPendingDraftTool,
   createClarifyWithUserTool,
+  createCancelScheduledPostTool,
+  createReschedulePostTool,
+  createPausePostingTool,
+  createResumePostingTool,
+  createRollbackPublishedPostTool,
+  createAnalyticsSnapshotTool,
+  createResearchTopicTool,
+  createScrapeCompetitorTool,
+  createGetProfileTool,
+  createUpdateBusinessProfileTool,
+  createSetStrategyOptoutTool,
+  createSaveMemoryTool,
+  createRecallMemoryTool,
+  createGetOlderHistoryTool,
+  createSearchKnowledgeTool,
 };

@@ -108,6 +108,9 @@ build_app() {
     info "Building all apps..."
     pnpm run build
 
+    info "Seeding knowledge base..."
+    pnpm run seed:knowledge
+
     ok "Build complete"
 }
 

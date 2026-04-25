@@ -236,23 +236,40 @@ export function formatStateSnapshot(snapshot: StateSnapshotData): string {
  */
 function describeCollected(collected: Record<string, unknown>): string {
   const parts: string[] = [];
+
   const platforms = collected.platforms as unknown;
   if (Array.isArray(platforms) && platforms.length) {
     parts.push(`platforms=${platforms.map(String).join('/')}`);
   }
-  if (typeof collected.topic === 'string' && collected.topic.length) {
-    parts.push(`topic="${truncate(collected.topic, 60)}"`);
-  }
-  if (typeof collected.content === 'string' && collected.content.length) {
+
+  const topics = collected.topics as unknown;
+  if (Array.isArray(topics) && topics.length) {
+    const label = topics.length === 1
+      ? `topic="${truncate(String(topics[0]), 60)}"`
+      : `topics=${topics.length} (${topics.slice(0, 3).map((t) => truncate(String(t), 20)).join('/')})`;
+    parts.push(label);
+  } else if (typeof collected.content === 'string' && collected.content.length) {
     parts.push(`content="${truncate(collected.content, 60)}"`);
   }
-  if (collected.publishImmediately === true) parts.push('timing=now');
-  else if (typeof collected.scheduleAt === 'string' && collected.scheduleAt) {
-    parts.push(`timing=${collected.scheduleAt}`);
+
+  if (collected.immediate === true) {
+    parts.push('timing=now');
+  } else if (typeof collected.startTime === 'string' && collected.startTime) {
+    parts.push(`timing=${collected.startTime}`);
+    if (typeof collected.intervalMinutes === 'number') {
+      parts.push(`interval=${collected.intervalMinutes}min`);
+    }
   }
+
+  const postStack = collected.postStack as unknown;
+  if (Array.isArray(postStack) && postStack.length) {
+    parts.push(`drafts_ready=${postStack.length}`);
+  }
+
   if (typeof collected.wantsImage === 'boolean') {
     parts.push(`image=${collected.wantsImage ? 'yes' : 'no'}`);
   }
+
   return parts.join(', ');
 }
 

@@ -1,15 +1,11 @@
 /**
- * Chat-service routing tests — slice 1.3.c
+ * Chat-service routing tests — updated for slice 1.3.f
  *
- * Focused on the routing decision after slice 1.3.c rewired the
- * "normal flow" branch:
- *   - intent=direct_action → orchestrator
- *   - hasPending=true (any intent) → orchestrator
- *   - intent=config_change_request (no pending) → proposal pipeline
- *   - else (no pending) → existing streamText reply
+ * After slice 1.3.f, the normal flow is simplified:
+ *   - Any non-onboarding turn → orchestrator (no intent parsing)
  *
- * Heavy collaborators are mocked at the module boundary so this spec
- * stays fast and deterministic.
+ * parseIntent is no longer imported by chat.service.ts. The module mock
+ * is kept to avoid transitive import errors from other modules.
  */
 
 jest.mock('../llm', () => ({
@@ -28,36 +24,26 @@ jest.mock('./proposals', () => ({
   createProposal: jest.fn().mockResolvedValue('prop-1'),
   confirm: jest.fn(),
   cancel: jest.fn(),
-}));
-jest.mock('ai-v5', () => ({
-  ...jest.requireActual('ai-v5'),
-  streamText: jest.fn(() => ({
-    textStream: (async function* () {
-      yield 'reply text';
-    })(),
-  })),
+  // cadence-config.service.ts calls registerApplier at module load when
+  // imported transitively through chat.service.ts — stub it to avoid
+  // "not a function" in Jest's CommonJS module environment.
+  registerApplier: jest.fn(),
 }));
 
 import { AutopilotChatService } from './chat.service';
 import { createLlmProvider } from '../llm';
-import { parseIntent } from '../agents/intent_parser';
 import { runOrchestrator } from '../agents/orchestrator';
 import { getStructuredProfile } from '../memory';
-import { createProposal } from './proposals';
 import type { LlmProvider } from '../skills/types';
 
 const mockCreateLlmProvider = createLlmProvider as jest.MockedFunction<
   typeof createLlmProvider
 >;
-const mockParseIntent = parseIntent as jest.MockedFunction<typeof parseIntent>;
 const mockRunOrchestrator = runOrchestrator as jest.MockedFunction<
   typeof runOrchestrator
 >;
 const mockGetStructuredProfile = getStructuredProfile as jest.MockedFunction<
   typeof getStructuredProfile
->;
-const mockCreateProposal = createProposal as jest.MockedFunction<
-  typeof createProposal
 >;
 
 const fakeLlm: LlmProvider = {
@@ -65,9 +51,7 @@ const fakeLlm: LlmProvider = {
   complete: jest.fn(),
 };
 
-function makePrismaMock(opts: {
-  pending?: { id: string; waitingFor: string; collectedData: unknown; expiresAt: Date } | null;
-} = {}) {
+function makePrismaMock() {
   return {
     apChatMessage: {
       create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
@@ -77,7 +61,10 @@ function makePrismaMock(opts: {
       findUnique: jest.fn().mockResolvedValue(null),
     },
     apPendingAction: {
-      findUnique: jest.fn().mockResolvedValue(opts.pending ?? null),
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
+    apCadenceConfig: {
+      findFirst: jest.fn().mockResolvedValue(null),
     },
   } as any;
 }
@@ -110,125 +97,72 @@ beforeEach(() => {
 });
 
 describe('AutopilotChatService — routing', () => {
-  test('routes direct_action through the orchestrator (not legacy startFlow)', async () => {
+  test('all non-onboarding turns route through the orchestrator', async () => {
     const prisma = makePrismaMock();
     const directAction = {
       startFlow: jest.fn(),
       cancelAction: jest.fn(),
       continuePending: jest.fn(),
     } as any;
-    const svc = new AutopilotChatService(prisma, directAction);
-    mockParseIntent.mockResolvedValue({
-      intent: 'direct_action',
-      directAction: { topic: 'launch' },
-    });
+    const svc = new AutopilotChatService(prisma, directAction, { pause: jest.fn(), resume: jest.fn() } as any);
 
-    const events: any[] = [];
-    await svc.handleChat(ORG, USER, { content: 'post about launch' }, (e) =>
-      events.push(e),
-    );
+    await svc.handleChat(ORG, USER, { content: 'post about launch' }, () => {});
 
     expect(mockRunOrchestrator).toHaveBeenCalledTimes(1);
     expect(directAction.startFlow).not.toHaveBeenCalled();
-    expect(directAction.continuePending).not.toHaveBeenCalled();
-
-    const call = mockRunOrchestrator.mock.calls[0];
-    expect(call[0].directAction).toBe(directAction);
-    expect(call[1].message).toBe('post about launch');
+    expect(mockRunOrchestrator.mock.calls[0][1].message).toBe('post about launch');
   });
 
-  test('routes any pending-action turn through orchestrator regardless of intent', async () => {
-    const prisma = makePrismaMock({
-      pending: {
-        id: 'pa-1',
-        waitingFor: 'timing',
-        collectedData: { topic: 'launch' },
-        expiresAt: new Date(Date.now() + 5 * 60_000),
-      },
-    });
+  test('orchestrator receives directAction dependency', async () => {
+    const prisma = makePrismaMock();
     const directAction = {
       startFlow: jest.fn(),
       cancelAction: jest.fn(),
       continuePending: jest.fn(),
     } as any;
-    const svc = new AutopilotChatService(prisma, directAction);
+    const svc = new AutopilotChatService(prisma, directAction, { pause: jest.fn(), resume: jest.fn() } as any);
 
-    // Even when intent_parser misfires and returns "unclear", a live
-    // pending action MUST still send the message into the orchestrator
-    // (otherwise the loop bug returns).
-    mockParseIntent.mockResolvedValue({ intent: 'unclear' });
+    await svc.handleChat(ORG, USER, { content: 'hello' }, () => {});
+
+    const call = mockRunOrchestrator.mock.calls[0];
+    expect(call[0].directAction).toBe(directAction);
+  });
+
+  test('small-talk and ambiguous messages also route through the orchestrator', async () => {
+    const prisma = makePrismaMock();
+    const svc = new AutopilotChatService(
+      prisma,
+      { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
+      { pause: jest.fn(), resume: jest.fn() } as any,
+    );
+
+    await svc.handleChat(ORG, USER, { content: 'thanks' }, () => {});
+
+    // After 1.3.f all turns hit the orchestrator — no streamText fallback.
+    expect(mockRunOrchestrator).toHaveBeenCalledTimes(1);
+  });
+
+  test('pending-action turns route through orchestrator (regression: "after 5 minutes" loop)', async () => {
+    const prisma = makePrismaMock();
+    const svc = new AutopilotChatService(
+      prisma,
+      { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
+      { pause: jest.fn(), resume: jest.fn() } as any,
+    );
 
     await svc.handleChat(ORG, USER, { content: 'after 5 minutes' }, () => {});
 
     expect(mockRunOrchestrator).toHaveBeenCalledTimes(1);
     expect(mockRunOrchestrator.mock.calls[0][1].message).toBe('after 5 minutes');
-    expect(directAction.continuePending).not.toHaveBeenCalled();
-  });
-
-  test('config_change_request without pending action goes to the proposal path', async () => {
-    const prisma = makePrismaMock();
-    const directAction = {
-      startFlow: jest.fn(),
-      cancelAction: jest.fn(),
-      continuePending: jest.fn(),
-    } as any;
-    const svc = new AutopilotChatService(prisma, directAction);
-    mockParseIntent.mockResolvedValue({
-      intent: 'config_change_request',
-      draft: {
-        targetEntity: 'business_profile',
-        targetId: null,
-        changes: { niche: 'SaaS' },
-        rationale: "I'll set niche to SaaS.",
-      },
-    });
-
-    const events: any[] = [];
-    await svc.handleChat(ORG, USER, { content: 'set niche to SaaS' }, (e) =>
-      events.push(e),
-    );
-
-    expect(mockRunOrchestrator).not.toHaveBeenCalled();
-    expect(mockCreateProposal).toHaveBeenCalled();
-    const proposalEvent = events.find((e) => e.type === 'proposal');
-    expect(proposalEvent).toBeDefined();
-    expect(proposalEvent.targetEntity).toBe('business_profile');
-  });
-
-  test('expired pending action does NOT force orchestrator route', async () => {
-    const prisma = makePrismaMock({
-      pending: {
-        id: 'pa-1',
-        waitingFor: 'timing',
-        collectedData: {},
-        expiresAt: new Date(Date.now() - 60_000), // expired
-      },
-    });
-    const directAction = {
-      startFlow: jest.fn(),
-      cancelAction: jest.fn(),
-      continuePending: jest.fn(),
-    } as any;
-    const svc = new AutopilotChatService(prisma, directAction);
-    mockParseIntent.mockResolvedValue({ intent: 'small_talk' });
-
-    await svc.handleChat(ORG, USER, { content: 'thanks' }, () => {});
-
-    expect(mockRunOrchestrator).not.toHaveBeenCalled();
   });
 
   test('orchestrator failure surfaces an error event and stops', async () => {
     const prisma = makePrismaMock();
-    const directAction = {
-      startFlow: jest.fn(),
-      cancelAction: jest.fn(),
-      continuePending: jest.fn(),
-    } as any;
-    const svc = new AutopilotChatService(prisma, directAction);
-    mockParseIntent.mockResolvedValue({
-      intent: 'direct_action',
-      directAction: {},
-    });
+    const svc = new AutopilotChatService(
+      prisma,
+      { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
+      { pause: jest.fn(), resume: jest.fn() } as any,
+    );
     mockRunOrchestrator.mockRejectedValue(new Error('llm down'));
 
     const events: any[] = [];
@@ -243,16 +177,11 @@ describe('AutopilotChatService — routing', () => {
 
   test('orchestrator returning empty text → done event with no message persisted', async () => {
     const prisma = makePrismaMock();
-    const directAction = {
-      startFlow: jest.fn(),
-      cancelAction: jest.fn(),
-      continuePending: jest.fn(),
-    } as any;
-    const svc = new AutopilotChatService(prisma, directAction);
-    mockParseIntent.mockResolvedValue({
-      intent: 'direct_action',
-      directAction: { topic: 'x' },
-    });
+    const svc = new AutopilotChatService(
+      prisma,
+      { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
+      { pause: jest.fn(), resume: jest.fn() } as any,
+    );
     mockRunOrchestrator.mockResolvedValue({
       text: '', // tool already emitted draft_preview
       toolCallCount: 1,

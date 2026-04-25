@@ -1,6 +1,6 @@
  'use client';
 
-import React, { ReactNode, useCallback } from 'react';
+import React, { FC, ReactNode, useCallback, useState } from 'react';
 import { Logo } from '@gitroom/frontend/components/new-layout/logo';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 const ModeComponent = dynamic(
@@ -48,6 +48,7 @@ const jakartaSans = Plus_Jakarta_Sans({
 
 export const LayoutComponent = ({ children }: { children: ReactNode }) => {
   const fetch = useFetch();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const { backendUrl, billingEnabled, isGeneral } = useVariables();
 
@@ -89,7 +90,7 @@ export const LayoutComponent = ({ children }: { children: ReactNode }) => {
           <ContinueProvider />
           <div
             className={clsx(
-              'flex flex-col min-h-screen min-w-screen text-newTextColor p-[12px]',
+              'flex flex-col min-h-screen min-w-screen text-newTextColor p-0 md:p-[12px]',
               jakartaSans.className
             )}
           >
@@ -97,8 +98,9 @@ export const LayoutComponent = ({ children }: { children: ReactNode }) => {
             {user.tier === 'FREE' && isGeneral && billingEnabled ? (
               <BillingAfter />
             ) : (
-              <div className="flex-1 flex gap-[8px]">
-                <div className="flex flex-col bg-newBgColorInner w-[80px] rounded-[12px]">
+              <div className="flex-1 flex gap-0 md:gap-[8px]">
+                {/* Desktop sidebar — hidden on mobile */}
+                <div className="hidden md:flex flex-col bg-newBgColorInner w-[80px] rounded-[12px]">
                   <div className={clsx("fixed h-full w-[64px] start-[17px] flex flex-1 top-0", user?.admin && 'pt-[60px]')}>
                     <div className="flex flex-col h-full gap-[32px] flex-1 py-[12px]">
                       <Logo />
@@ -106,8 +108,45 @@ export const LayoutComponent = ({ children }: { children: ReactNode }) => {
                     </div>
                   </div>
                 </div>
-                <div className="flex-1 bg-newBgLineColor rounded-[12px] overflow-hidden flex flex-col gap-[1px] blurMe">
+
+                {/* Mobile sidebar drawer — always rendered, animated */}
+                <div className={clsx("fixed inset-0 z-50 md:hidden", sidebarOpen ? "pointer-events-auto" : "pointer-events-none")}>
+                  {/* Backdrop */}
+                  <div
+                    className={clsx("absolute inset-0 bg-black/60 transition-opacity duration-300", sidebarOpen ? "opacity-100" : "opacity-0")}
+                    onClick={() => setSidebarOpen(false)}
+                  />
+                  {/* Drawer panel */}
+                  <div
+                    className={clsx(
+                      "absolute left-0 top-0 h-full w-[80px] bg-newBgColorInner flex flex-col py-[12px] gap-[32px] rounded-r-[12px] transition-transform duration-300",
+                      user?.admin && 'pt-[60px]',
+                      sidebarOpen ? "translate-x-0" : "-translate-x-full"
+                    )}
+                  >
+                    {/* Close button */}
+                    <button
+                      className="absolute top-[10px] right-[8px] text-textItemBlur hover:text-newTextColor transition-colors"
+                      onClick={() => setSidebarOpen(false)}
+                      aria-label="Close menu"
+                    >
+                      <CloseIcon />
+                    </button>
+                    <Logo />
+                    <TopMenu />
+                  </div>
+                </div>
+
+                <div className="flex-1 bg-newBgLineColor md:rounded-[12px] overflow-hidden flex flex-col gap-[1px] blurMe">
                   <div className="flex bg-newBgColorInner h-[80px] px-[20px] items-center">
+                    {/* Hamburger — mobile only */}
+                    <button
+                      className="md:hidden mr-[12px] text-textItemBlur hover:text-newTextColor transition-colors"
+                      onClick={() => setSidebarOpen((v) => !v)}
+                      aria-label="Open menu"
+                    >
+                      <HamburgerIcon />
+                    </button>
                     <div className="text-[24px] font-[600] flex flex-1">
                       <Title />
                     </div>
@@ -134,3 +173,38 @@ export const LayoutComponent = ({ children }: { children: ReactNode }) => {
     </ContextWrapper>
   );
 };
+
+const HamburgerIcon: FC = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+
+const CloseIcon: FC = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);

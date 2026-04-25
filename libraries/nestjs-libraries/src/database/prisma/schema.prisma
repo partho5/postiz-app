@@ -1239,3 +1239,22 @@ model ApPendingAction {
 
   @@map("ap_pending_action")
 }
+
+// ─── Slice 1.3.g: Knowledge base chunks (global, not per-tenant) ─────────────
+
+model ApKnowledgeChunk {
+  id          String   @id @default(uuid())
+  sourceFile  String
+  heading     String
+  content     String
+  contentHash String
+  /// pgvector embedding — dimension fixed at 1536 (text-embedding-3-small).
+  /// Queried via $queryRaw; not filterable through Prisma ORM directly.
+  embedding   Unsupported("vector(1536)")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([sourceFile, heading])
+  @@index([contentHash])
+  @@map("ap_knowledge_chunk")
+}

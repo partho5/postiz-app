@@ -41,12 +41,12 @@ export interface DraftProposal {
 }
 
 export interface DirectActionData {
-  topic?: string;
+  topics?: string[];
   content?: string;
   platforms?: string[];
-  publishImmediately?: boolean;
-  scheduleAt?: string;
-  countPerPlatform?: number;
+  startTime?: string;
+  immediate?: boolean;
+  intervalMinutes?: number;
   wantsImage?: boolean;
 }
 
@@ -85,18 +85,18 @@ const intentResultSchema = z
     changes: z.record(z.unknown()).optional(),
     rationale: z.string().optional(),
     // ── direct_action fields ──────────────────────────────────────────────
-    /** What the post should be about; paraphrase from the conversation. */
-    topic: z.string().optional(),
+    /** What the posts should be about — array even for a single post. */
+    topics: z.array(z.string()).optional(),
     /** Verbatim content if the user provided exact text to post. */
     content: z.string().optional(),
     /** Target platform names (e.g. ["facebook","linkedin"]). Omit if not specified. */
     platforms: z.array(z.string()).optional(),
-    /** True when the user says "now", "immediately", "right now". */
-    publishImmediately: z.boolean().optional(),
-    /** Specific time the user gave (ISO 8601 or natural phrase like "tomorrow 3pm"). */
-    scheduleAt: z.string().optional(),
-    /** Number of posts to generate per platform. Default 1. */
-    countPerPlatform: z.number().int().optional(),
+    /** Natural-language or ISO time for the first (or only) post. Omit if not mentioned. */
+    startTime: z.string().optional(),
+    /** True ONLY when user says "now", "immediately", "right now", "asap". Never default to true. */
+    immediate: z.boolean().optional(),
+    /** Minutes between posts when scheduling a series (default 60). Omit if not a series. */
+    intervalMinutes: z.number().int().optional(),
     /** True if user explicitly asked for an image. Omit if not mentioned. */
     wantsImage: z.boolean().optional(),
   })
@@ -129,13 +129,13 @@ Given a user message, output a JSON object with:
   ${INTENT_CLASSES}
 
 For intent = "direct_action" ALSO include these fields — but ONLY if explicitly stated in the CURRENT user message (after the --- separator). Do NOT inherit or infer them from earlier turns shown above the separator:
-  topic              - what the post should be about (paraphrase from the current message only)
-  content            - verbatim post text if the user provided exact wording in the current message
-  platforms          - platforms the user named in the current message (e.g. ["facebook"]). Omit if not mentioned.
-  publishImmediately - true ONLY if the current message contains "now", "immediately", "right now", "asap". Never default to true. Omit if timing is not mentioned.
-  scheduleAt         - specific future time from the current message in ISO 8601 format. Omit if not mentioned.
-  countPerPlatform   - number of posts to generate per platform. Omit if not mentioned.
-  wantsImage         - true only if the user explicitly asked for an image in the current message. Omit otherwise.
+  topics         - array of topics the posts should be about. Always an array even for one post (e.g. ["the topic"] or ["word1","word2","word3"]). Omit if not mentioned.
+  content        - verbatim post text if the user provided exact wording in the current message.
+  platforms      - platforms the user named in the current message (e.g. ["facebook"]). Omit if not mentioned.
+  startTime      - when the first (or only) post should go out, as stated in the current message. Pass the natural-language phrase verbatim (e.g. "next hour", "tomorrow 9am"). Omit if not mentioned.
+  immediate      - true ONLY if the current message contains "now", "immediately", "right now", "asap". Never default to true. Omit otherwise.
+  intervalMinutes - minutes between consecutive posts when the user asks for a series (e.g. "every hour" → 60, "every day" → 1440). Omit if not a series.
+  wantsImage     - true only if the user explicitly asked for an image in the current message. Omit otherwise.
 
 For intent = "config_change_request" ALSO include:
   targetEntity - the entity to mutate, one of:
@@ -241,12 +241,12 @@ export async function parseIntent(
 
   if (object.intent === 'direct_action') {
     result.directAction = {
-      topic: object.topic,
+      topics: object.topics,
       content: object.content,
       platforms: object.platforms,
-      publishImmediately: object.publishImmediately,
-      scheduleAt: object.scheduleAt,
-      countPerPlatform: object.countPerPlatform,
+      startTime: object.startTime,
+      immediate: object.immediate,
+      intervalMinutes: object.intervalMinutes,
       wantsImage: object.wantsImage,
     };
   }

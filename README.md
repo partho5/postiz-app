@@ -99,6 +99,31 @@
 
 To have the project up and running, please follow the [Quick Start Guide](https://docs.postiz.com/quickstart)
 
+## Autopilot Knowledge Base
+
+The autopilot chatbot answers questions about its capabilities and features using a vector knowledge base stored in PostgreSQL (pgvector).
+
+**How it works**
+
+- Markdown files in `knowledge/` are the source of truth
+- Each `## Section` heading becomes one searchable vector chunk
+- On every deploy, the seed script embeds new/changed chunks and skips unchanged ones (hash check)
+- The chatbot calls `search_knowledge` at runtime to answer capability and FAQ questions
+
+**Adding or updating content**
+
+1. Edit an existing file in `knowledge/` or add a new one (one file per product domain)
+2. Run locally to verify: `pnpm run seed:knowledge`
+3. Commit and push — `./deploy.sh restart` seeds automatically after the build
+
+**Required environment variable**
+
+```
+AP_OPENAI_API_KEY=sk-...   # used for text-embedding-3-small
+```
+
+The seed step is skipped with a non-zero exit if this key is missing, which fails the deploy intentionally.
+
 ## Sponsor Postiz
 
 We now give a few options to Sponsor Postiz:
