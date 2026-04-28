@@ -1472,7 +1472,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 #### E.1 — Scheduling/posts band
 1. [x] **Fix the immediate bug** — add `read_time_slots` + relax emission so empty results get a natural reply.
-2. [ ] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
+2. [x] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
 3. [ ] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
 4. [ ] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
 5. [ ] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
@@ -1524,11 +1524,33 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 **Out of scope:** `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap` (E.2).
 
+#### F.E.2 — Cadence CRUD (`update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`)
+
+**Goal:** Complete the cadence write surface so the LLM can update posting times/frequency and set blackout windows via chat — the complement to the `read_time_slots` read tool added in E.1.
+
+**Files:**
+- MOD `schema.prisma` — new `ApBlackoutWindow` model (startHour, endHour, timezone, label, active) + Organization back-relation `apBlackoutWindow`
+- NEW `orchestrator/tools/update_time_slots.ts` + `.spec.ts` — sets `preferredTimes` on one platform via `applyCadenceConfig`; normalises HH:MM input
+- NEW `orchestrator/tools/update_posts_per_day.ts` + `.spec.ts` — sets `postsPerDay` on one platform via `applyCadenceConfig`
+- NEW `orchestrator/tools/pause_all.ts` + `.spec.ts` — pauses ALL active platforms; wraps `CadenceConfigService.pause()`; ergonomic vacation-mode alias for `pause_posting` with no platform filter
+- NEW `orchestrator/tools/set_blackout_window.ts` + `.spec.ts` — creates row in `ApBlackoutWindow`; does not yet enforce in scheduler (future)
+- NEW `orchestrator/tools/set_frequency_cap.ts` + `.spec.ts` — applies `postsPerDay` to specified platforms or all active platforms via `applyCadenceConfig`
+- MOD `orchestrator/tools/index.ts` — register 5 new tools
+
+**Definition of done:**
+- All 5 tools emit `action_result`; write through `applyCadenceConfig` or `CadenceConfigService` (no raw duplicate Prisma logic)
+- `set_blackout_window` writes to new `ApBlackoutWindow` table; schema pushed + client regenerated
+- Descriptions distinguish confusable peers (`pause_all` vs `pause_posting`, `update_posts_per_day` vs `set_frequency_cap`)
+- All autopilot tests green; each new tool has ≥ 5 spec cases
+
+**Out of scope:** Enforcing blackout windows in `SlotSchedulerService` (future); `list_drafts`, `read_draft` (E.3).
+
 ---
 
 ### G. Roadmap build log
 
 2026-04-28 | E.1 | orchestrator/tools/read_time_slots.ts, read_time_slots.spec.ts, orchestrator/tools/index.ts, orchestrator/types.ts, agents/orchestrator.ts, orchestrator/tools/list_scheduled_posts.ts
+2026-04-28 | E.2 | schema.prisma (ApBlackoutWindow), orchestrator/tools/{update_time_slots,update_posts_per_day,pause_all,set_blackout_window,set_frequency_cap}.ts + *.spec.ts, tools/index.ts
 
 ---
 

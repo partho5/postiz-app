@@ -32,6 +32,11 @@ import { createGetOlderHistoryTool } from './get_older_history';
 import { createSearchKnowledgeTool } from './search_knowledge';
 import { createSetTimezoneTool } from './set_timezone';
 import { createReadTimeSlotsTool } from './read_time_slots';
+import { createUpdateTimeSlotsTool } from './update_time_slots';
+import { createUpdatePostsPerDayTool } from './update_posts_per_day';
+import { createPauseAllTool } from './pause_all';
+import { createSetBlackoutWindowTool } from './set_blackout_window';
+import { createSetFrequencyCapTool } from './set_frequency_cap';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -70,6 +75,12 @@ export function buildOrchestratorTools(
     createSetTimezoneTool() as OrchestratorTool<unknown, unknown>,
     // ── Slice E.1 — cadence config read ──────────────────────────────────────
     createReadTimeSlotsTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.2 — cadence CRUD ──────────────────────────────────────────────
+    createUpdateTimeSlotsTool() as OrchestratorTool<unknown, unknown>,
+    createUpdatePostsPerDayTool() as OrchestratorTool<unknown, unknown>,
+    createPauseAllTool({ cadenceConfig: deps.cadenceConfig }) as OrchestratorTool<unknown, unknown>,
+    createSetBlackoutWindowTool() as OrchestratorTool<unknown, unknown>,
+    createSetFrequencyCapTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -95,4 +106,9 @@ export {
   createSearchKnowledgeTool,
   createSetTimezoneTool,
   createReadTimeSlotsTool,
+  createUpdateTimeSlotsTool,
+  createUpdatePostsPerDayTool,
+  createPauseAllTool,
+  createSetBlackoutWindowTool,
+  createSetFrequencyCapTool,
 };

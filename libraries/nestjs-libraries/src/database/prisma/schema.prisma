@@ -63,6 +63,7 @@ model Organization {
   apPublishedPost         ApPublishedPost[]
   apTenantStrategyOptout  ApTenantStrategyOptout?
   apPendingAction         ApPendingAction?
+  apBlackoutWindow        ApBlackoutWindow[]
 }
 
 model Tags {
@@ -1259,4 +1260,21 @@ model ApKnowledgeChunk {
   @@unique([sourceFile, heading])
   @@index([contentHash])
   @@map("ap_knowledge_chunk")
+}
+
+// ─── Slice E.2: Blackout Windows ─────────────────────────────────────────────
+
+model ApBlackoutWindow {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  startHour      Int
+  endHour        Int
+  timezone       String       @default("UTC")
+  label          String?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("ap_blackout_window")
 }
