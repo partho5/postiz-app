@@ -1154,6 +1154,353 @@ This keeps the guide from bloating with pre-written detail that would drift befo
 
 ---
 
+## Capability roadmap — autopilot as a full social-media-manager replacement
+
+> **Purpose.** The slice list above (§Status tracker) covers the foundations: chat ingress, intent/orchestrator, stack + scheduler, generation, learning. This section is the **forward-looking spec** that frames the work *after* the foundation is solid: the operations the autopilot must perform to credibly replace a hired human social media manager. It exists for three reasons:
+>
+> 1. **Surface gaps early.** Most failures users report (e.g. the "Nothing scheduled." bug below) trace to a missing tool or a tool selected for the wrong intent. Having the full inventory in one place lets us see the gap before the user does.
+> 2. **Anchor every new slice.** Phase 5+ slices should map onto items in §B; if a proposed slice doesn't, ask whether it belongs.
+> 3. **Order delivery by user value.** §E sequences the work — scheduling first, configs next, analytics after, paid ads last — so the chat product gets useful before it gets exhaustive.
+>
+> Status markers in §B: **(✓)** = tool exists today, **(△)** = partial, **(✗)** = missing.
+
+### A. Today's diagnosis (the "Nothing scheduled." bug — the canonical example of the gap)
+
+What the user sees:
+```
+User: what are my current scheduled times?
+Bot:  Nothing scheduled.
+User: i know no posts. but time slots
+Bot:  Nothing scheduled.
+User: but isn't there any time slot set?
+Bot:  Nothing scheduled.
+```
+Meanwhile `/config?tab=cadence` shows `09:00` is configured.
+
+Why it happens:
+1. **Wrong tool selected.** The LLM hears "scheduled times / time slots" and calls `list_scheduled_posts`, which queries `ApScheduledSlot` (queued posts), NOT `ApCadenceConfig.preferredTimes` (the user's intended meaning).
+2. **No CRUD tool exists for cadence preferred times.** The state snapshot does include `active_cadence`, but the LLM ignores it and reaches for the nearest-named tool.
+3. **Robotic reply.** When `list_scheduled_posts` returns `emitted: true` with zero posts, `runOrchestrator` (`agents/orchestrator.ts:244-249`) suppresses the LLM's natural-language reply — the frontend renders the empty `scheduled_list` event as the literal string `"Nothing scheduled."` There is no LLM-authored prose layer in this code path.
+
+Minimal fix shape:
+1. Add the missing config-CRUD tools (granular, one verb each, sharp descriptions so the LLM picks the right one even with typos like "schedled"): `read_time_slots`, `update_time_slots`, `update_posts_per_day`, `read_growth_rules`, `upsert_growth_rule`, `delete_growth_rule`, `read_strategy_optout`.
+2. Soften emission policy: when a tool emits but result is empty/zero, allow the LLM's text reply through. Treat structured emits as complementary cards, not replacements for prose.
+3. Add system-prompt rule: *"Always re-narrate tool observations in human voice; never echo raw tool output."*
+
+### B. Comprehensive capability list
+
+Reordered into four bands by delivery priority: **scheduling/posts → configs → analytics+listening+community → paid (last)**. Each item is `[tool_name]` (proposed name).
+
+#### Band 1 — Post scheduling & content (the core product surface)
+
+##### B1.1 Scheduling & calendar
+- Schedule a post at a specific time — `schedule_post` ✓
+- Schedule a series at intervals — `schedule_post` ✓ (intervalMinutes)
+- List upcoming scheduled posts — `list_scheduled_posts` ✓
+- Cancel one scheduled post — `cancel_scheduled_post` ✓
+- Bulk cancel — `cancel_scheduled_post` ✓ (array form)
+- Reschedule — `reschedule_post` ✓
+- View posting calendar (weekly/monthly view) — `read_calendar_view` ✗
+- Find best-time-to-post (per platform, audience-derived) — `compute_best_times` ✗
+- Read cadence preferred times — `read_time_slots` ✗ ⚠ blocking the current bug
+- Update cadence preferred times — `update_time_slots` ✗
+- Set posts-per-day per platform — `update_posts_per_day` ✗
+- Pause posting on a platform — `pause_posting` ✓
+- Resume posting on a platform — `resume_posting` ✓
+- Pause posting globally for vacation/holiday — `pause_all` ✗
+- Set blackout windows ("never between 10pm–7am") — `set_blackout_window` ✗
+- Set posting frequency cap ("max 3/day") — `set_frequency_cap` ✗
+- Stagger across timezones — `enable_timezone_staggering` ✗
+
+##### B1.2 Content creation
+- Draft a single post (text only) — `schedule_post` ✓ (creation+schedule fused)
+- Draft a series of N posts on a theme — `schedule_post` ✓ (array form)
+- Draft a thread (Twitter/X, LinkedIn) — `draft_thread` ✗
+- Draft a carousel (slides + caption) — `draft_carousel` ✗
+- Draft a long-form post (LinkedIn article, FB note) — `draft_longform` ✗
+- Draft a poll — `draft_poll` ✗
+- Draft a quote tweet / reply — `draft_reply` ✗
+- Generate an image for a post (DALL·E/SD) — partial via `wantsImage` flag △
+- Generate alt-text for accessibility — `generate_alt_text` ✗
+- Generate a video script (Reels/Shorts/TikTok) — `draft_video_script` ✗
+- Generate captions/subtitles for a video — `generate_video_captions` ✗
+- Generate hashtags for a draft — `suggest_hashtags` ✗
+- Tune an existing draft for a specific platform — `rewrite_for_platform` ✓ (skill exists; not exposed as tool)
+- Apply brand voice to any draft — `apply_brand_voice` ✗
+- Translate/localise a post — `translate_post` ✗
+- Add CTAs / UTM links — `add_utm_link` ✗
+- Generate emoji/decoration variants — `vary_post_style` ✗
+
+##### B1.3 Drafts & approval workflow
+- List drafts (the post stack) — `list_drafts` ✗
+- Read a single draft by id — `read_draft` ✗
+- Edit a draft — `edit_draft` ✗
+- Delete a draft — `delete_draft` ✗
+- Approve / reject a draft — `approve_draft` ✗ / `reject_draft` ✗
+- Bulk approve a batch — `bulk_approve_drafts` ✗
+- Move a draft between platforms — `move_draft_platform` ✗
+- Lock a draft to prevent edits — `lock_draft` ✗
+
+##### B1.4 Publishing & delivery
+- Publish immediately — `schedule_post` ✓ (immediate flag)
+- Retry a failed publish — `retry_publish` ✗
+- View failed publishes / publish errors — `list_publish_errors` ✗
+- Quarantine a problematic post — `quarantine_post` ✗
+- Rollback (delete from platform after publish) — `rollback_published_post` ✓
+
+##### B1.5 Content ideation & research
+- Suggest topics aligned with niche & calendar — `suggest_topics` ✗
+- Pull from trending topics (Twitter trends, Google Trends, Reddit hot) — `fetch_trending` ✗
+- Research a topic deeply — `research_topic` ✓
+- Research/scrape a competitor — `scrape_competitor` ✓
+- Find and follow industry hashtags — `find_hashtags` ✗
+- Suggest content pillars / themes — `suggest_content_pillars` ✗
+- Build a content calendar for N weeks — `generate_content_calendar` ✗
+- Repurpose an existing piece across formats (blog → tweet → carousel) — `repurpose_content` ✗
+- Pull headlines from RSS / news feeds — `fetch_news_feed` ✗
+- Mine FAQs / customer questions for content — `mine_faq_content` ✗
+
+##### B1.6 Crisis & incident
+- Pause everything immediately — `pause_all` ✗
+- Take down a published post — `rollback_published_post` ✓
+- Issue an apology / clarification post — `draft_apology_post` ✗
+- Notify stakeholders — `send_stakeholder_alert` ✗
+
+#### Band 2 — Configs & settings (everything that shapes what the bot does, not the posts themselves)
+
+##### B2.1 Strategy & onboarding
+- Capture business niche, audience, goals, KPIs — `read_business_profile` ✓ / `update_business_profile` ✓
+- Define brand voice: tone, vocabulary, emojis, hashtags, banned words — `read_brand_voice` △ (inside profile) / `update_brand_voice` △
+- Define anti-patterns ("never say X", "never sell on Sunday") — `update_anti_patterns` △
+- Regulatory flags (HIPAA, finance, alcohol) — `update_regulatory_flags` △
+- Define growth rules ("post more on weekdays", "skip Mondays") — `read_growth_rules` ✗ / `upsert_growth_rule` ✗ / `delete_growth_rule` ✗
+- Set primary geography & target timezone — `set_timezone` ✓ / `set_target_audience_geo` ✗
+- Set persona objectives (awareness, leads, sales, community) — `set_objective` ✗
+
+##### B2.2 Settings / preferences (general)
+- Read all settings — `read_all_settings` ✗
+- Toggle strategy data sharing — `set_strategy_optout` ✓ / `read_strategy_optout` ✗
+- Toggle notifications — `set_notification_prefs` ✗
+- Set posting language — `set_post_language` ✗
+
+##### B2.3 Account & profile management
+- Update bio / handle / avatar / banner — `update_profile_assets` ✗
+- Manage link-in-bio — `update_bio_link` ✗
+- Add/remove a connected social account — `connect_account` ✗ / `disconnect_account` ✗
+- Refresh a stale OAuth token — `refresh_token` ✗
+- List connected accounts + health — `list_accounts` ✗
+- Set platform-specific defaults — `set_platform_defaults` ✗
+
+##### B2.4 Knowledge & docs
+- Search internal knowledge base — `search_knowledge` ✓
+- Add an FAQ entry — `add_faq_entry` ✗
+- Add a brand asset (logo, color, font URL) — `add_brand_asset` ✗
+
+##### B2.5 Memory, learning, self-improvement
+- Save a long-term memory — `save_memory` ✓
+- Recall by query — `recall_memory` ✓
+- Read older history — `get_older_history` ✓
+- Learn from rejections (user said "no, don't do X again") — `record_negative_feedback` ✗
+- Learn from approvals (reinforce style) — `record_positive_feedback` ✗
+- Periodically self-review and propose strategy tweaks — `propose_strategy_review` ✗
+
+##### B2.6 Compliance, brand safety, approvals
+- Brand safety check on a draft (banned words, regulatory flags) — `check_brand_safety` ✗
+- Plagiarism / duplicate-post check — `check_duplicates` ✗
+- Image rights / license check — `check_image_rights` ✗
+- Profanity / NSFW detection — `check_nsfw` ✗
+- Disclosure compliance (#ad, #sponsored) — `enforce_disclosure` ✗
+- Approval-required gate for senior posts — `require_human_approval` ✗
+- Audit log of every AI action — `read_audit_log` ✗ (`ApActivityLog` exists, no read tool)
+
+##### B2.7 Conversation UX (meta tools)
+- Ask user a clarifying question — `clarify_with_user` ✓
+- Cancel pending draft / abandon flow — `cancel_pending_draft` ✓
+- Confirm before destructive action — `confirm_with_user` ✗
+- Show progress on long-running task — `report_progress` ✗
+- Apologise / acknowledge mistake gracefully — handled by prompt △
+
+#### Band 3 — Analytics, listening & community (measure + react)
+
+##### B3.1 Analytics, reporting, optimisation
+- Per-platform analytics snapshot — `analytics_snapshot` ✓
+- Cross-platform consolidated report — `consolidated_report` ✗
+- Top-performing posts (by reach/engagement/saves) — `top_posts` ✗
+- Worst-performing posts (drag analysis) — `bottom_posts` ✗
+- Audience growth chart — `audience_growth` ✗
+- Demographic breakdown — `audience_demographics` ✗
+- Engagement-rate over time — `engagement_trend` ✗
+- Hashtag performance — `hashtag_performance` ✗
+- Time-of-day heatmap — `engagement_heatmap` ✗
+- Funnel: post → click → conversion — `conversion_funnel` ✗
+- A/B test setup — `start_ab_test` ✗
+- A/B test results — `ab_test_result` ✗
+- Weekly/monthly digest export (PDF/CSV) — `export_report` ✗
+- Email a stakeholder report — `send_report_email` ✗
+- ROI / cost-per-engagement — `compute_roi` ✗
+
+##### B3.2 Listening & monitoring
+- Set brand-mention alerts — `add_mention_alert` ✗
+- Read brand-mention feed — `read_mentions` ✗
+- Read sentiment summary — `read_sentiment` ✗
+- Track competitor cadence/engagement — `track_competitors` ✗
+- Track keyword/hashtag in real time — `track_keyword` ✗
+- Detect viral moments — `detect_viral_moment` ✗
+- Detect crisis spike (sudden negative sentiment) — `detect_crisis` ✗
+
+##### B3.3 Community management — inbound
+- List unread DMs across platforms — `list_dms` ✗
+- Read a DM thread — `read_dm_thread` ✗
+- Reply to a DM (LLM-drafted) — `reply_to_dm` ✗
+- List comments on recent posts — `list_comments` ✗
+- Reply to a comment — `reply_to_comment` ✗
+- Like a comment — `like_comment` ✗
+- Hide / delete a comment — `moderate_comment` ✗
+- Detect spam / abuse comments — `flag_abusive_comment` ✗
+- Pin a top comment — `pin_comment` ✗
+- Auto-route urgent inbound to human — `escalate_to_human` ✗
+- Save canned replies — `save_canned_reply` ✗
+
+##### B3.4 Community management — outbound engagement
+- Like target accounts' posts — `engage_like` ✗
+- Comment on target accounts' posts — `engage_comment` ✗
+- Follow/unfollow accounts — `follow_account` ✗ / `unfollow_account` ✗
+- Reshare/retweet relevant content — `reshare_post` ✗
+- Send a cold DM (with rate-limits / safety) — `send_outreach_dm` ✗
+- Build & maintain target lists (prospects, influencers) — `manage_target_list` ✗
+
+##### B3.5 CRM & lead capture
+- Capture leads from DMs/comments — `capture_lead` ✗
+- Sync leads to external CRM (HubSpot, etc.) — `sync_to_crm` ✗
+- Tag a contact — `tag_contact` ✗
+
+##### B3.6 Influencer / partnership
+- Find candidate influencers in niche — `find_influencers` ✗
+- Track partnership UTMs — `track_partner_utm` ✗
+- Send partnership outreach — `send_outreach_dm` ✗ (shared with B3.4)
+
+#### Band 4 — Paid (last)
+
+##### B4.1 Paid / boosting
+- Boost an organic post — `boost_post` ✗
+- Set ad budget — `set_ad_budget` ✗
+- Read ad performance — `read_ad_performance` ✗
+- Pause an ad set — `pause_ads` ✗
+
+### C. Counts at a glance
+
+- Tools today: **20** (in `orchestrator/tools/index.ts`)
+- Operations enumerated above: **~120**
+- Missing (✗): **~95**
+- Partial (△): **~7**
+
+The gap is large but structured: most missing tools are thin wrappers over Prisma reads or thin wrappers over the existing skills/services. The orchestrator's ReAct loop, state-snapshot, and emission protocol do not need redesign — only an expanded, sharper-described tool catalog and a more lenient text-emission policy.
+
+### D. Implementation plan — layering capabilities on top of existing systems
+
+#### D.1 Anchors that are reused as-is (no redesign)
+- **Orchestrator ReAct loop** — `runOrchestrator` in `autopilot/agents/orchestrator.ts`. Every new operation is a tool, not a new agent.
+- **State snapshot** — `buildStateSnapshot` / `formatStateSnapshot`. New state surfaces (e.g. blackout windows, mention alerts) extend the snapshot rather than spawn a parallel context channel.
+- **Tool factory pattern** — `createXxxTool(deps): OrchestratorTool<I,O>` in `autopilot/orchestrator/tools/*.ts`, registered in `buildOrchestratorTools` (`tools/index.ts`).
+- **Existing services** — `DirectActionHandler`, `CadenceConfigService`, `SlotSchedulerService`, stack push/pop, `pop-and-publish`, `rewrite_for_platform` skill, `analytics_snapshot` skill, memory service. New tools wrap these; they do not duplicate Prisma writes.
+- **Postiz publisher** — multi-platform poster reused for any platform-write tool (DMs, comments, likes once scopes are added).
+- **Chat ingress + SSE event protocol** — extend `ChatStreamEvent` union for new card types (e.g. `mentions_feed`, `analytics_chart`); no protocol replacement.
+- **`ApActivityLog`** for audit, **`ApCreditLedger`** for cost, **`createProposal` pipeline** for any change requiring user confirmation.
+
+#### D.2 Tool-design patterns every new tool must follow
+- One file per tool under `autopilot/orchestrator/tools/`, factory-exported as `createXxxTool(deps)`.
+- Zod input schema; structured `observation` string for the LLM; optional `data` payload.
+- **Emission policy (revised):** never suppress the LLM's prose when a tool's emit has empty/zero content. Structured emits are *complementary* UI cards, not replacements for an authored reply. Update `runOrchestrator` to check `result.data` size before suppressing.
+- Sharp, distinguishing one-line `description` — include a "NOT for X" hint when the tool is near a confusable peer (e.g. `read_time_slots` description says: "Reads cadence preferred times. NOT for listing scheduled posts — use list_scheduled_posts for that.").
+- Always reuse the existing service for the underlying mutation; never write Prisma directly when a service exists.
+- Every tool gets a `*.spec.ts` next to it (matches existing convention).
+- Register in `buildOrchestratorTools` barrel.
+
+#### D.3 Tool-catalog scaling — keep the LLM from drowning in tools
+At ~120 tools, prompt context bloats and tool-selection accuracy drops. Mitigations, in order of investment:
+1. **Sharp descriptions + cross-links** (cheap; do from the start).
+2. **Namespacing** — group tool names by family: `cadence.read_time_slots`, `cadence.update_time_slots`, `analytics.top_posts`, `comments.reply`. The model finds the right family faster.
+3. **Two-tier tool router** (later) — a small first-pass agent picks a *family* (e.g. "this is a cadence question") and only that family's tools are exposed to the main orchestrator. Defer until tool count > ~50 actually causes selection regressions in eval.
+4. **Per-tier scoping** — cheaper tiers see a reduced catalog; expensive tools (research, scrape) are gated behind credit checks before the model can call them.
+
+#### D.4 New data models vs. existing tables
+- **Existing tables suffice** for: cadence read/write, growth rules CRUD, drafts (`ApPostCandidate`), scheduled slots, profile, memory, audit log, knowledge, strategy patterns.
+- **New tables needed** (introduce per the slice that needs them, not up front):
+  - `ap_blackout_window` — for `set_blackout_window` (B1.1).
+  - `ap_objective` — for `set_objective` (B2.1).
+  - `ap_comment_log`, `ap_dm_log` — for community management (B3.3/B3.4).
+  - `ap_mention_alert` — for listening (B3.2).
+  - `ap_target_list` — for outbound engagement (B3.4).
+  - `ap_ab_test` — for A/B (B3.1).
+  - `ap_lead` — for CRM (B3.5).
+  - `ap_ad_campaign` — for paid (B4.1).
+- Every new model gets `@@map`'d to `ap_*` and back-related to `Organization` per existing convention.
+
+#### D.5 External integrations & OAuth scopes
+- Bands 1–2 need **no new scopes** beyond what Postiz already requests.
+- Band 3 inbound (DMs, comments, mentions) requires per-platform read scopes — flagged as a per-integration prereq slice, not a tool concern.
+- Band 3 outbound (like, follow, reshare) requires write scopes that some platforms restrict (e.g. Twitter/X v2 limits, Meta Graph permissions). Each affected platform gets its own enablement slice.
+- Band 4 (paid) requires Ads API scopes — separate auth flow per platform.
+
+#### D.6 Background jobs / crons added per band
+- Bands 1–2: **none** — all tools are request/response.
+- Band 3: mention-listener cron (poll per platform), sentiment-scorer worker, A/B result harvester, viral-moment detector.
+- Band 4: ad-performance snapshotter cron.
+- All new crons live in `apps/cron/src/tasks/` and register via `cron.module.ts` (matches existing pattern).
+
+#### D.7 Quality, cost & safety hooks
+- Every write/destructive tool calls the existing **`createProposal` → confirm → apply** pipeline by default; bypass only for pure reads or non-destructive writes (e.g. saving a memory).
+- **`check_brand_safety`** runs as a pre-flight inside `schedule_post` and `boost_post` once implemented.
+- **`require_human_approval`** is a tool the orchestrator can call when uncertain; it flips the draft to `pending_human` and stops auto-publish.
+- **`ApCreditLedger`** debits per-tool cost via existing `debitCredits`; high-cost tools (research, scrape, ad spend setting) gated by `registerSkillGate`.
+
+#### D.8 Testing & rollback
+- One spec per tool (existing convention).
+- New crons get a smoke spec.
+- **Feature flag per band** (env or DB-driven) so a band can ship dark and be enabled per tenant. Add to `configuration.checker.ts`.
+- Each band ends with a chat-service integration test that exercises a representative end-to-end flow (e.g. "user asks about time slots → bot reads cadence → bot replies in human voice").
+
+#### D.9 Risks & open questions
+- **Tool-count overflow** before D.3 step 3 lands. Watch for tool-selection regressions in eval as the catalog grows past ~40.
+- **Rate limits** on engagement actions (Twitter/X, Instagram). Need a per-platform throttle service before B3.4 ships.
+- **OAuth scope churn** breaking existing Postiz integrations when we ask for additional scopes. Coordinate with the existing integration refresh path.
+- **Cost of LLM-narrated replies on every tool call** — emitting prose alongside cards increases token spend per turn. Tradeoff worth tracking; cheap models for narration may be enough.
+
+### E. Rollout order
+
+Bands deliver in priority order. Each numbered item is one slice unless flagged "(multi-slice)".
+
+#### E.1 — Scheduling/posts band
+1. [ ] **Fix the immediate bug** — add `read_time_slots` + relax emission so empty results get a natural reply.
+2. [ ] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
+3. [ ] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
+4. [ ] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
+5. [ ] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
+6. [ ] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
+7. [ ] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
+8. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
+
+#### E.2 — Configs band
+9. [ ] **Growth rules CRUD** — `read_growth_rules`, `upsert_growth_rule`, `delete_growth_rule`.
+10. [ ] **Profile & brand voice** — `read_brand_voice`, `update_brand_voice`, `update_anti_patterns`, `update_regulatory_flags`, `set_objective`, `set_target_audience_geo`.
+11. [ ] **Settings, accounts & docs** — `read_all_settings`, `set_notification_prefs`, `set_post_language`, `list_accounts`, `connect_account` / `disconnect_account`, `add_faq_entry`, `add_brand_asset`.
+12. [ ] **Compliance & approvals** — `check_brand_safety`, `check_duplicates`, `check_nsfw`, `enforce_disclosure`, `require_human_approval`, `read_audit_log`.
+13. [ ] **Memory & feedback loops** — `record_negative_feedback`, `record_positive_feedback`, `propose_strategy_review`.
+14. [ ] **Conversation UX polish** — `confirm_with_user`, `report_progress`.
+
+#### E.3 — Analytics, listening & community band
+15. [ ] **Analytics deep dive** — `top_posts`, `bottom_posts`, `engagement_trend`, `engagement_heatmap`, `hashtag_performance`, `audience_growth`, `audience_demographics`, `consolidated_report`. (multi-slice)
+16. [ ] **A/B + reporting** — `start_ab_test`, `ab_test_result`, `export_report`, `send_report_email`, `compute_roi`, `conversion_funnel`. (multi-slice)
+17. [ ] **Listening** — `add_mention_alert`, `read_mentions`, `read_sentiment`, `track_competitors`, `track_keyword`, `detect_viral_moment`, `detect_crisis`. (multi-slice)
+18. [ ] **Community inbound** — DMs + comments read/reply/moderate. (multi-slice)
+19. [ ] **Community outbound** — `engage_like`, `engage_comment`, `follow_account`/`unfollow_account`, `reshare_post`, `send_outreach_dm`, `manage_target_list`. (multi-slice)
+20. [ ] **CRM & influencer** — `capture_lead`, `sync_to_crm`, `tag_contact`, `find_influencers`, `track_partner_utm`. (multi-slice)
+
+#### E.4 — Paid band (last)
+21. [ ] **Paid / boosting** — `boost_post`, `set_ad_budget`, `read_ad_performance`, `pause_ads`. (multi-slice)
+
+---
+
 ## Build log
 
 Append-only. One line per slice completed (or partially completed). Newest at bottom.
@@ -1254,4 +1601,5 @@ Changes to this guide itself (new slices added, slice reshaped, conventions upda
 <!-- meta begin -->
 - created — initial skeleton, Phase 0 + Phase 1 fully specified, Phases 2–9 listed only.
 - 2026-04-23 — added Phase 1 revisit: sub-slices 1.3.a–1.3.g for the versatile orchestrator (replaces the rigid intent_parser → branching flow with a tool-use agent + chrono-node time parser). Motivated by "after N minutes" scheduling loop.
+- 2026-04-28 — added §Capability roadmap (parts A–E): purpose, "Nothing scheduled." bug diagnosis, full ~120-operation capability inventory (4 priority bands), implementation plan layered on existing systems, rollout order. Sourced from prior tmp.md scratch; cleared tmp.md.
 <!-- meta end -->
