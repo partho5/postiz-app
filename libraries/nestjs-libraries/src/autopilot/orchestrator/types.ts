@@ -69,14 +69,19 @@ export interface OrchestratorContext {
  *   what the LLM uses to decide its next move or compose its final reply.
  * - `data`        is structured payload, opaque to the LLM, available to
  *   downstream code that bypasses the LLM (e.g. unit tests, telemetry).
- * - `emitted`     flags that the tool already pushed a UI side-event
- *   via `ctx.emit`. The orchestrator can then suppress its own
- *   text echo of the same information if appropriate.
+ * - `emitted`      flags that the tool already pushed a UI side-event
+ *   via `ctx.emit`.
+ * - `suppressText`  controls whether the orchestrator suppresses its LLM
+ *   prose when `emitted` is true. Defaults to `true` (suppress). Set to
+ *   `false` when the emitted card may be empty (e.g. a zero-result list)
+ *   so the LLM can still narrate in human voice.
  */
 export interface OrchestratorToolResult<Output = unknown> {
   observation: string;
   data?: Output;
   emitted?: boolean;
+  /** When false, orchestrator prose is NOT suppressed even if emitted=true. */
+  suppressText?: boolean;
 }
 
 // ---------------------------------------------------------------------------

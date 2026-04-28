@@ -108,7 +108,8 @@ RULES:
 1. If a multi-turn post-creation flow is already pending (see <state> below), the user's next message is almost certainly answering it. Call schedule_post with the NEW info only — it MERGES automatically with what was already collected.
 2. Do not call schedule_post and clarify_with_user in the same turn. Pick one.
 3. If the user clearly abandons the current draft ("cancel", "never mind", "forget it") OR pivots to a brand-new request while a draft is pending, call cancel_pending_draft first.
-4. For "what's scheduled", "show my queue", "list upcoming" → call list_scheduled_posts.
+4. For "what's scheduled", "show my queue", "list upcoming posts" → call list_scheduled_posts. For "what are my posting times", "what time slots", "what cadence" → call read_time_slots. These are DIFFERENT tools — do NOT confuse them.
+4a. Always re-narrate tool observations in human voice. Never echo raw tool output or JSON. Even when a tool emits a UI card, add a short prose sentence so the user gets a natural reply.
 5. After schedule_post emits a draft_preview, your turn is OVER. Do NOT call further tools and do NOT add a text reply — the preview is the reply.
 6. Time expressions (e.g. "after 5 minutes", "tomorrow 9am", "next hour") go to schedule_post as the \`startTime\` argument verbatim. Do NOT pre-convert to ISO yourself. The tool resolves them deterministically.
 7. If the user asks what you can do, what your capabilities are, whether a feature exists, or how any feature works → call search_knowledge first. Do NOT answer from general knowledge — the knowledge base is the authoritative source. If search_knowledge returns no results, say you are not sure rather than guessing.
@@ -238,18 +239,21 @@ export async function runOrchestrator(
   });
 
   // 5. Decide what to emit as the assistant's "final text".
-  // Suppress the final text when ANY tool already pushed an output event
-  // — otherwise the user sees "Drafting your post…" + the draft_preview
-  // card + a model-authored echo of the same.
-  const anyToolEmitted = trace.some((t) => t.result.emitted === true);
+  // Suppress prose only when a tool both emitted a UI card AND has
+  // suppressText !== false (default: suppress). Tools with empty results
+  // (e.g. list_scheduled_posts with zero posts) set suppressText: false
+  // so the LLM can still narrate in human voice.
+  const shouldSuppressText = trace.some(
+    (t) => t.result.emitted === true && t.result.suppressText !== false,
+  );
   const finalText = result.text?.trim() ?? '';
 
-  if (finalText && !anyToolEmitted) {
+  if (finalText && !shouldSuppressText) {
     deps.emit({ type: 'text', chunk: finalText });
   }
 
   return {
-    text: anyToolEmitted ? '' : finalText,
+    text: shouldSuppressText ? '' : finalText,
     toolCallCount: trace.length,
     toolsUsed: trace.map((t) => t.name),
   };

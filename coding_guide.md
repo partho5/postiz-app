@@ -1471,7 +1471,7 @@ At ~120 tools, prompt context bloats and tool-selection accuracy drops. Mitigati
 Bands deliver in priority order. Each numbered item is one slice unless flagged "(multi-slice)".
 
 #### E.1 — Scheduling/posts band
-1. [ ] **Fix the immediate bug** — add `read_time_slots` + relax emission so empty results get a natural reply.
+1. [x] **Fix the immediate bug** — add `read_time_slots` + relax emission so empty results get a natural reply.
 2. [ ] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
 3. [ ] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
 4. [ ] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
@@ -1498,6 +1498,37 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 #### E.4 — Paid band (last)
 21. [ ] **Paid / boosting** — `boost_post`, `set_ad_budget`, `read_ad_performance`, `pause_ads`. (multi-slice)
+
+---
+
+### F. Slice expansions
+
+#### F.E.1 — Fix the immediate bug (`read_time_slots` + emission policy)
+
+**Goal:** Eliminate the "Nothing scheduled." loop (§A) by (a) adding a correctly-named tool the LLM will pick for cadence-time questions, and (b) allowing LLM prose through when an emitting tool returns empty data.
+
+**Files:**
+- NEW `orchestrator/tools/read_time_slots.ts` — pure read of `ApCadenceConfig.preferredTimes` + `postsPerDay` per platform; no emitted card, LLM narrates
+- NEW `orchestrator/tools/read_time_slots.spec.ts`
+- MOD `orchestrator/types.ts` — add `suppressText?: boolean` to `OrchestratorToolResult`; when `false`, orchestrator lets LLM prose through even if `emitted: true`
+- MOD `agents/orchestrator.ts` — suppression check uses `suppressText !== false`; update system-prompt rule to "Always re-narrate tool observations in human voice"
+- MOD `orchestrator/tools/list_scheduled_posts.ts` — set `suppressText: posts.length > 0` so empty results no longer swallow prose
+- MOD `orchestrator/tools/index.ts` — register `createReadTimeSlotsTool`
+
+**Definition of done:**
+- `read_time_slots` returns per-platform preferred times and `postsPerDay` as a human-readable observation (no UI card)
+- `list_scheduled_posts` description updated with "NOT for reading time-slot config — use `read_time_slots` for that"
+- `read_time_slots` description says "NOT for listing upcoming posts — use `list_scheduled_posts` for that"
+- LLM prose is emitted when any emitting tool has `suppressText: false` (e.g. empty scheduled list)
+- All autopilot tests green; `read_time_slots.spec.ts` covers ≥ 6 cases
+
+**Out of scope:** `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap` (E.2).
+
+---
+
+### G. Roadmap build log
+
+2026-04-28 | E.1 | orchestrator/tools/read_time_slots.ts, read_time_slots.spec.ts, orchestrator/tools/index.ts, orchestrator/types.ts, agents/orchestrator.ts, orchestrator/tools/list_scheduled_posts.ts
 
 ---
 

@@ -31,6 +31,7 @@ import { createRecallMemoryTool } from './recall_memory';
 import { createGetOlderHistoryTool } from './get_older_history';
 import { createSearchKnowledgeTool } from './search_knowledge';
 import { createSetTimezoneTool } from './set_timezone';
+import { createReadTimeSlotsTool } from './read_time_slots';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -67,6 +68,8 @@ export function buildOrchestratorTools(
     createSearchKnowledgeTool() as OrchestratorTool<unknown, unknown>,
     // ── Timezone preference ───────────────────────────────────────────────────
     createSetTimezoneTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.1 — cadence config read ──────────────────────────────────────
+    createReadTimeSlotsTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -91,4 +94,5 @@ export {
   createGetOlderHistoryTool,
   createSearchKnowledgeTool,
   createSetTimezoneTool,
+  createReadTimeSlotsTool,
 };

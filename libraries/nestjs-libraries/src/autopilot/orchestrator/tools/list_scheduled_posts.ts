@@ -55,7 +55,7 @@ export function createListScheduledPostsTool(): OrchestratorTool<
   return {
     name: 'list_scheduled_posts',
     description:
-      'List the user\'s upcoming scheduled posts (pending, not yet published). Optionally filter by platform or how far ahead to look. Use when the user asks "what\'s scheduled?", "what goes out this week?", "show my queue", etc.',
+      'List the user\'s upcoming scheduled posts (pending, not yet published). Optionally filter by platform or how far ahead to look. Use when the user asks "what\'s scheduled?", "what goes out this week?", "show my queue". NOT for reading time-slot config — use read_time_slots for that.',
     parameters: inputSchema,
     handler: async (ctx, input) => {
       const daysAhead = input.daysAhead ?? 14;
@@ -109,6 +109,7 @@ export function createListScheduledPostsTool(): OrchestratorTool<
         observation,
         data: { count: posts.length, posts },
         emitted: true,
+        suppressText: posts.length > 0,
       };
     },
   };
