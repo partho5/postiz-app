@@ -261,12 +261,7 @@ export class AutopilotChatService {
         const recentMessages = await this._loadRecentMessages(org.id, 20);
         const history = recentMessages.slice(0, -1);
 
-        // Derive timezone from the tenant's first active cadence config.
-        const tzConfig = await this._prisma.apCadenceConfig.findFirst({
-          where: { organizationId: org.id, active: true },
-          select: { timezone: true },
-        });
-        const timezone = tzConfig?.timezone ?? 'UTC';
+        const timezone = org.timezone ?? 'UTC';
 
         const result = await runOrchestrator(
           {

@@ -152,7 +152,7 @@ export class PopAndPublishService {
 
     if (preBoundCandidateId) {
       const row = await this._prisma.apPostCandidate.findFirst({
-        where: { id: preBoundCandidateId, organizationId, status: ApPostCandidateStatus.PENDING },
+        where: { id: preBoundCandidateId, organizationId, status: ApPostCandidateStatus.SCHEDULED },
       });
       if (row) {
         // Reserve it so it can't be popped by a concurrent run.

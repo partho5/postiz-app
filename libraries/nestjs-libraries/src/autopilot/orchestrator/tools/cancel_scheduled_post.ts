@@ -6,7 +6,7 @@
  * rest. A single cancel is just slotIds:["id"] — same code path.
  */
 
-import { ApScheduledSlotStatus } from '@prisma/client';
+import { ApPostCandidateStatus, ApScheduledSlotStatus } from '@prisma/client';
 import { z } from 'zod';
 import type { OrchestratorTool } from '../types';
 import { formatForUser } from '../../time/parse';
@@ -50,7 +50,7 @@ export function createCancelScheduledPostTool(): OrchestratorTool<
       for (const slotId of input.slotIds) {
         const slot = await ctx.db.apScheduledSlot.findFirst({
           where: { id: slotId, organizationId: ctx.org.id },
-          select: { id: true, platform: true, status: true, scheduledAt: true, metadata: true },
+          select: { id: true, platform: true, status: true, scheduledAt: true, metadata: true, postCandidateId: true },
         });
 
         if (!slot) {
@@ -79,6 +79,14 @@ export function createCancelScheduledPostTool(): OrchestratorTool<
             },
           },
         });
+
+        // Per-post candidate: return it to the stack so it can be picked up again.
+        if (slot.postCandidateId) {
+          await ctx.db.apPostCandidate.updateMany({
+            where: { id: slot.postCandidateId, organizationId: ctx.org.id, status: ApPostCandidateStatus.SCHEDULED },
+            data: { status: ApPostCandidateStatus.PENDING },
+          });
+        }
 
         const humanTime = formatForUser(slot.scheduledAt, { now: ctx.now, timezone: ctx.timezone });
         results.push({ slotId, ok: true, note: `cancelled ${slot.platform} post for ${humanTime}` });

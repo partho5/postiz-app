@@ -63,7 +63,16 @@ const inputSchema = z.object({
     .boolean()
     .optional()
     .describe('True only if the user explicitly asked for an AI-generated image.'),
-});
+  perPostTimes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Per-topic schedule times — same length as topics. Use when the user gives each post a DIFFERENT time (e.g. "post topic1 at 11am, topic2 at 2pm, topic3 at 5pm"). Each element is a natural-language time phrase. If all posts share one start time + interval, omit this and use startTime + intervalMinutes instead.',
+    ),
+}).refine(
+  (d) => !d.perPostTimes || d.perPostTimes.length === d.topics.length,
+  { message: 'perPostTimes must be the same length as topics' },
+);
 
 export type SchedulePostInput = z.infer<typeof inputSchema>;
 
@@ -92,6 +101,7 @@ export function createSchedulePostTool(
         immediate: input.immediate,
         intervalMinutes: input.intervalMinutes,
         wantsImage: input.wantsImage,
+        perPostTimes: input.perPostTimes,
       };
 
       let previewEmitted = false;
@@ -109,6 +119,7 @@ export function createSchedulePostTool(
           directAction,
           ctx.llm,
           wrappedEmit,
+          ctx.timezone,
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

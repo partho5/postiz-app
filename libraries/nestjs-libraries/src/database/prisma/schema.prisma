@@ -18,6 +18,7 @@ model Organization {
   name              String
   description       String?
   apiKey            String?
+  timezone          String             @default("America/New_York")
   users             UserOrganization[]
   media             Media[]
   paymentId         String?
@@ -1067,6 +1068,7 @@ model ApMemoryVector {
 
 enum ApPostCandidateStatus {
   PENDING
+  SCHEDULED
   RESERVED
   PUBLISHED
   EXPIRED

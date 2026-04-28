@@ -30,6 +30,7 @@ import { createSaveMemoryTool } from './save_memory';
 import { createRecallMemoryTool } from './recall_memory';
 import { createGetOlderHistoryTool } from './get_older_history';
 import { createSearchKnowledgeTool } from './search_knowledge';
+import { createSetTimezoneTool } from './set_timezone';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -64,6 +65,8 @@ export function buildOrchestratorTools(
     createGetOlderHistoryTool() as OrchestratorTool<unknown, unknown>,
     // ── Slice 1.3.g — knowledge base search ──────────────────────────────────
     createSearchKnowledgeTool() as OrchestratorTool<unknown, unknown>,
+    // ── Timezone preference ───────────────────────────────────────────────────
+    createSetTimezoneTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -87,4 +90,5 @@ export {
   createRecallMemoryTool,
   createGetOlderHistoryTool,
   createSearchKnowledgeTool,
+  createSetTimezoneTool,
 };

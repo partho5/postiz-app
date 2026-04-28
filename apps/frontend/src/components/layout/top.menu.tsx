@@ -21,6 +21,30 @@ export const useMenuItem = () => {
 
   const firstMenu = [
     {
+      name: 'Config',
+      icon: (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="21"
+          height="21"
+          viewBox="0 0 24 24"
+          fill="none"
+        >
+          <path
+            d="M3 6h18M3 12h18M3 18h18"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="7" cy="6" r="2" fill="currentColor" />
+          <circle cx="17" cy="12" r="2" fill="currentColor" />
+          <circle cx="7" cy="18" r="2" fill="currentColor" />
+        </svg>
+      ),
+      path: '/config',
+    },
+    {
       name: 'Autopilot',
       icon: (
         <svg

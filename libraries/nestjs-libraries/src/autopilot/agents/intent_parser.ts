@@ -48,6 +48,8 @@ export interface DirectActionData {
   immediate?: boolean;
   intervalMinutes?: number;
   wantsImage?: boolean;
+  /** Per-topic times for pinned scheduling — same length as topics. */
+  perPostTimes?: string[];
 }
 
 export interface IntentResult {

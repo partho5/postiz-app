@@ -123,7 +123,13 @@ ARRAY-FIRST RULES — read carefully, these are critical:
 9. cancel_scheduled_post takes \`slotIds: string[]\`. Pass ALL ids in one call: slotIds: ["id1","id2","id3"]. Never call it in a loop.
 10. reschedule_post takes \`slotIds: string[]\` and \`times: string[]\` as PARALLEL arrays of EQUAL length. slotIds[i] is rescheduled to times[i]. They MUST be the same length — validate before calling.
 11. pause_posting takes \`platforms: string[]\`. Omit to pause ALL connected platforms.
-12. resume_posting takes \`platforms: string[]\`. Omit to resume ALL currently-paused platforms.`;
+12. resume_posting takes \`platforms: string[]\`. Omit to resume ALL currently-paused platforms.
+13. TIMEZONE — call set_timezone immediately (no confirmation) whenever the user:
+    • states a location or region: "I'm in Bangladesh", "I'm in New York", "I'm based in Dubai"
+    • names a timezone or offset: "GMT+6", "UTC+5:30", "EST", "PST", "IST", "BST", "CET"
+    • asks to use a specific time context: "use Dhaka time", "switch to Eastern time", "set timezone to Tokyo"
+    • mentions country/city in any time-related context: "schedule at 11 am Bangladesh time"
+    Convert to IANA before calling (see tool parameter description). Do NOT call set_timezone and schedule_post in the same turn — set timezone first, reply that it's set, and wait for the user to proceed.`;
 
 /**
  * Compose the full system prompt: role + style + state-snapshot fence.

@@ -45,6 +45,12 @@ export interface PushOptions {
   contentVariants?: Record<string, unknown>;
   /** Arbitrary extra data. */
   metadata?: Record<string, unknown>;
+  /**
+   * Override the initial status. Use SCHEDULED for per-post pre-assigned
+   * candidates so they are invisible to popTop (which only sees PENDING).
+   * Defaults to PENDING.
+   */
+  status?: ApPostCandidateStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +72,7 @@ export async function push(
       organizationId: tenantId,
       platform,
       content,
+      status: options?.status ?? ApPostCandidateStatus.PENDING,
       priority: options?.priority ?? 0,
       source: options?.source ?? 'unknown',
       expiresAt: options?.expiresAt ?? null,

@@ -22,8 +22,8 @@ import { PrismaService } from '@gitroom/nestjs-libraries/database/prisma/prisma.
 import type { LlmProvider } from '../skills/types';
 import type { DirectActionData } from '../agents/intent_parser';
 import { runCopywriter } from '../agents/copywriter';
-import { push } from '../stack';
-import { parseTimeExpression } from '../time/parse';
+import { push, ApPostCandidateStatus } from '../stack';
+import { parseTimeExpression, formatForUser } from '../time/parse';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +48,8 @@ interface CollectedData {
   imageUrl?: string;
   postStack?: PostEntry[];
   times?: string[];
+  /** Natural-language time expressions, one per topic. Presence means per-post mode. */
+  perPostTimes?: string[];
 }
 
 export type ChatDraftPreviewEvent = {
@@ -89,6 +91,7 @@ export class DirectActionHandler {
     directAction: DirectActionData,
     llm: LlmProvider,
     emit: (event: EmitEvent) => void,
+    timezone = 'UTC',
   ): Promise<string> {
     const availablePlatforms = await this._getAvailablePlatforms(org.id);
 
@@ -102,9 +105,10 @@ export class DirectActionHandler {
       immediate: directAction.immediate,
       intervalMinutes: directAction.intervalMinutes,
       wantsImage: directAction.wantsImage,
+      perPostTimes: directAction.perPostTimes?.length ? directAction.perPostTimes : undefined,
     };
 
-    return this._advance(org, collected, llm, availablePlatforms, emit, null);
+    return this._advance(org, collected, llm, availablePlatforms, emit, null, timezone);
   }
 
   /**
@@ -119,6 +123,7 @@ export class DirectActionHandler {
     userMessage: string,
     llm: LlmProvider,
     emit: (event: EmitEvent) => void,
+    timezone = 'UTC',
   ): Promise<string> {
     const collected = (collectedRaw as CollectedData) ?? {};
     const availablePlatforms = await this._getAvailablePlatforms(org.id);
@@ -131,9 +136,25 @@ export class DirectActionHandler {
       }
       case 'timing': {
         const timing = await this._parseTiming(userMessage, llm);
-        collected.immediate = timing.immediate;
-        collected.startTime = timing.startTime;
-        collected.intervalMinutes = timing.intervalMinutes;
+
+        if (timing.timezone) {
+          await this._prisma.organization.update({
+            where: { id: org.id },
+            data: { timezone: timing.timezone },
+          });
+          timezone = timing.timezone;
+        }
+
+        if (timing.perPostTimes?.length) {
+          collected.perPostTimes = timing.perPostTimes;
+          collected.immediate = undefined;
+          collected.startTime = undefined;
+          collected.intervalMinutes = undefined;
+        } else {
+          collected.immediate = timing.immediate;
+          collected.startTime = timing.startTime;
+          collected.intervalMinutes = timing.intervalMinutes;
+        }
         break;
       }
       case 'approval': {
@@ -144,7 +165,7 @@ export class DirectActionHandler {
       }
     }
 
-    return this._advance(org, collected, llm, availablePlatforms, emit, pendingActionId);
+    return this._advance(org, collected, llm, availablePlatforms, emit, pendingActionId, timezone);
   }
 
   /**
@@ -166,57 +187,92 @@ export class DirectActionHandler {
       };
     }
 
+    const org = await this._prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { timezone: true },
+    });
+    const timezone = org?.timezone ?? 'UTC';
+
     const collected = row.collectedData as CollectedData;
     const postStack = collected.postStack ?? [];
     const times = collected.times ?? [];
+    const isPerPost = (collected.perPostTimes?.length ?? 0) > 0;
 
     if (postStack.length === 0) {
       return { ok: false, message: 'Draft data missing — please try again.' };
     }
 
-    // Push each post to the candidate stack (decoupled from slots).
-    for (const post of postStack) {
-      await push(this._prisma as any, orgId, post.platform, post.content, {
-        priority: 100,
-        source: 'chat_direct_action',
-        metadata: {
-          hashtags: post.hashtags ?? [],
-          ...(post.mediaUrl ? { mediaUrl: post.mediaUrl } : {}),
-          ...(collected.imageUrl ? { imageUrl: collected.imageUrl } : {}),
-        },
-      });
-    }
-
-    // Create bare scheduled slots — no postCandidateId, cron fills at fire time.
-    for (let i = 0; i < postStack.length; i++) {
-      const scheduledAt = times[i] ? new Date(times[i]) : new Date();
-      await this._prisma.apScheduledSlot.create({
-        data: {
-          organizationId: orgId,
-          platform: postStack[i].platform,
-          scheduledAt,
-          status: 'PENDING',
-          metadata: { source: 'chat_direct_action' },
-        },
-      });
+    if (isPerPost) {
+      // Per-post mode: each candidate is pinned to its slot via postCandidateId.
+      // Status SCHEDULED makes it invisible to popTop (which only selects PENDING).
+      for (let i = 0; i < postStack.length; i++) {
+        const post = postStack[i];
+        const candidate = await push(this._prisma as any, orgId, post.platform, post.content, {
+          priority: 100,
+          source: 'chat_direct_action',
+          status: ApPostCandidateStatus.SCHEDULED,
+          metadata: {
+            hashtags: post.hashtags ?? [],
+            ...(post.mediaUrl ? { mediaUrl: post.mediaUrl } : {}),
+            ...(collected.imageUrl ? { imageUrl: collected.imageUrl } : {}),
+          },
+        });
+        const scheduledAt = times[i] ? new Date(times[i]) : new Date();
+        await this._prisma.apScheduledSlot.create({
+          data: {
+            organizationId: orgId,
+            platform: post.platform,
+            scheduledAt,
+            status: 'PENDING',
+            postCandidateId: candidate.id,
+            metadata: { source: 'chat_direct_action_per_post' },
+          },
+        });
+      }
+    } else {
+      // Stack mode: push candidates as PENDING (eligible for any slot pop).
+      // Slots are bare — cron picks the top candidate at fire time.
+      for (const post of postStack) {
+        await push(this._prisma as any, orgId, post.platform, post.content, {
+          priority: 100,
+          source: 'chat_direct_action',
+          metadata: {
+            hashtags: post.hashtags ?? [],
+            ...(post.mediaUrl ? { mediaUrl: post.mediaUrl } : {}),
+            ...(collected.imageUrl ? { imageUrl: collected.imageUrl } : {}),
+          },
+        });
+      }
+      for (let i = 0; i < postStack.length; i++) {
+        const scheduledAt = times[i] ? new Date(times[i]) : new Date();
+        await this._prisma.apScheduledSlot.create({
+          data: {
+            organizationId: orgId,
+            platform: postStack[i].platform,
+            scheduledAt,
+            status: 'PENDING',
+            metadata: { source: 'chat_direct_action' },
+          },
+        });
+      }
     }
 
     await this._deletePendingAction(orgId);
 
+    // Build confirmation message: all scheduled times in the org's timezone.
     const count = postStack.length;
-    const firstTime = times[0] ? new Date(times[0]) : new Date();
-    const timeLabel = firstTime.getTime() <= Date.now() + 5 * 60_000
-      ? 'now'
-      : firstTime.toLocaleString('en-US', {
-          weekday: 'short', month: 'short', day: 'numeric',
-          hour: 'numeric', minute: '2-digit',
-        });
+    const now = new Date();
+    const uniqueTimes = [...new Set(times)]; // each topic yields one time, dedup across platforms
+    const timeLabels = uniqueTimes.map((t) =>
+      formatForUser(new Date(t), { now, timezone }),
+    );
+    const timeList = timeLabels.join(', ');
 
     return {
       ok: true,
       message: count === 1
-        ? `Queued — going out ${timeLabel}.`
-        : `Queued ${count} posts — first going out ${timeLabel}.`,
+        ? `Queued — going out ${timeLabels[0] ?? 'now'}.`
+        : `Queued ${count} posts. Slots: ${timeList}.`,
     };
   }
 
@@ -238,6 +294,7 @@ export class DirectActionHandler {
     availablePlatforms: string[],
     emit: (event: EmitEvent) => void,
     existingActionId: string | null,
+    timezone = 'UTC',
   ): Promise<string> {
 
     // Step 1: Platforms.
@@ -260,7 +317,8 @@ export class DirectActionHandler {
     }
 
     // Step 2: Timing.
-    if (!collected.immediate && !collected.startTime) {
+    const isPerPost = (collected.perPostTimes?.length ?? 0) > 0;
+    if (!isPerPost && !collected.immediate && !collected.startTime) {
       await this._upsert(org.id, collected, 'timing', existingActionId);
       const msg = 'Post now or schedule it? (e.g. "now", "tomorrow 9am", "every hour from next hour")';
       emit({ type: 'text', chunk: msg });
@@ -272,13 +330,16 @@ export class DirectActionHandler {
     const platforms = collected.platforms ?? [];
     const intervalMs = (collected.intervalMinutes ?? 60) * 60_000;
 
-    // Resolve start time.
+    // Resolve start time (stack mode only).
     let startMs: number;
-    if (collected.immediate) {
+    if (isPerPost) {
+      startMs = Date.now(); // unused in per-post mode; set for type safety
+    } else if (collected.immediate) {
       startMs = Date.now();
     } else {
       const parsed = parseTimeExpression(collected.startTime!, {
         now: new Date(),
+        timezone,
         forwardOnly: true,
       });
       startMs = parsed && !parsed.isPast ? parsed.date.getTime() : Date.now();
@@ -309,7 +370,17 @@ export class DirectActionHandler {
     // One slot per topic; all platforms share that slot time.
     let slotIndex = 0;
     for (const topic of topics) {
-      const scheduledAt = new Date(startMs + slotIndex * intervalMs).toISOString();
+      let scheduledAt: string;
+      if (isPerPost && collected.perPostTimes?.[slotIndex]) {
+        const parsed = parseTimeExpression(collected.perPostTimes[slotIndex], {
+          now: new Date(),
+          timezone,
+          forwardOnly: true,
+        });
+        scheduledAt = (parsed && !parsed.isPast ? parsed.date : new Date()).toISOString();
+      } else {
+        scheduledAt = new Date(startMs + slotIndex * intervalMs).toISOString();
+      }
 
       for (const platform of platforms) {
         const postText = collected.content ?? topic;
@@ -389,22 +460,40 @@ export class DirectActionHandler {
   private async _parseTiming(
     message: string,
     llm: LlmProvider,
-  ): Promise<{ immediate: boolean; startTime?: string; intervalMinutes?: number }> {
+  ): Promise<{
+    immediate: boolean;
+    startTime?: string;
+    intervalMinutes?: number;
+    perPostTimes?: string[];
+    timezone?: string;
+  }> {
     const { object } = await generateObject({
       model: llm.model,
       schema: z.object({
-        immediate: z.boolean().describe('true if user wants to post right now'),
-        startTime: z.string().optional().describe('Natural-language time phrase for the first post (pass verbatim)'),
-        intervalMinutes: z.number().int().optional().describe('Minutes between posts if this is a series'),
+        immediate: z.boolean().describe('true only when user says "now", "right now", "asap", "immediately"'),
+        startTime: z.string().optional().describe(
+          'Single start time phrase when all posts share one time or a uniform interval (e.g. "tomorrow 9am", "next hour"). Omit when perPostTimes is used.',
+        ),
+        intervalMinutes: z.number().int().optional().describe(
+          'Minutes between posts for a uniform series (e.g. 60 for hourly, 1440 for daily). Only set when startTime is also set.',
+        ),
+        perPostTimes: z.array(z.string()).optional().describe(
+          'Use when user gives MULTIPLE DISTINCT times — one per post in order (e.g. ["11am","2pm","5pm"]). Do NOT set startTime when this is present.',
+        ),
+        timezone: z.string().optional().describe(
+          'IANA timezone if mentioned (e.g. "GMT+6" → "Asia/Dhaka", "EST" → "America/New_York", "IST" → "Asia/Kolkata", "Bangladesh" → "Asia/Dhaka"). Omit if no timezone mentioned.',
+        ),
       }),
-      prompt: `User said: "${message}"\nExtract posting timing. If they say "every hour from next hour" → immediate=false, startTime="next hour", intervalMinutes=60.`,
-      system: 'Determine when the user wants to post. "now"/"asap" → immediate=true. Otherwise extract startTime verbatim and intervalMinutes if it is a series.',
+      prompt: `User said: "${message}"\n\nExtract timing. Examples:\n- "now" → immediate=true\n- "tomorrow 9am" → startTime="tomorrow 9am"\n- "every hour from next hour" → startTime="next hour", intervalMinutes=60\n- "11am, 2pm, 5pm" → perPostTimes=["11am","2pm","5pm"]\n- "11am 2pm 5pm GMT+6" → perPostTimes=["11am","2pm","5pm"], timezone="Asia/Dhaka"`,
+      system: 'Extract posting timing from the user message. Prefer perPostTimes for multiple distinct times, startTime+intervalMinutes for uniform series.',
     }).catch(() => ({ object: { immediate: true } }));
 
     return {
       immediate: object.immediate ?? false,
-      startTime: (object as { startTime?: string }).startTime,
-      intervalMinutes: (object as { intervalMinutes?: number }).intervalMinutes,
+      startTime: (object as any).startTime,
+      intervalMinutes: (object as any).intervalMinutes,
+      perPostTimes: (object as any).perPostTimes,
+      timezone: (object as any).timezone,
     };
   }
 

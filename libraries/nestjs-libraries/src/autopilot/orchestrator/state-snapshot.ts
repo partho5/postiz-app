@@ -50,6 +50,7 @@ export interface UpcomingSlotSnapshot {
   id: string;
   platform: string;
   scheduledAt: Date;
+  postCandidateId: string | null;
 }
 
 export interface StateSnapshotData {
@@ -108,7 +109,7 @@ export async function buildStateSnapshot(
         },
         orderBy: { scheduledAt: 'asc' },
         take: 5,
-        select: { id: true, platform: true, scheduledAt: true },
+        select: { id: true, platform: true, scheduledAt: true, postCandidateId: true },
       }),
       db.apScheduledSlot.count({
         where: {
@@ -155,6 +156,7 @@ export async function buildStateSnapshot(
       id: s.id,
       platform: s.platform,
       scheduledAt: s.scheduledAt,
+      postCandidateId: s.postCandidateId ?? null,
     })),
     upcomingScheduledCount: upcomingCount,
   };
@@ -221,7 +223,8 @@ export function formatStateSnapshot(snapshot: StateSnapshotData): string {
         now: snapshot.now,
         timezone: snapshot.timezone,
       });
-      return `  - ${s.platform}: ${human} (${s.scheduledAt.toISOString()})`;
+      const slotType = s.postCandidateId ? '[pinned]' : '[stack]';
+      return `  - ${s.platform}: ${human} ${slotType} (${s.scheduledAt.toISOString()})`;
     });
     lines.push(...slotLines);
   }
@@ -252,7 +255,10 @@ function describeCollected(collected: Record<string, unknown>): string {
     parts.push(`content="${truncate(collected.content, 60)}"`);
   }
 
-  if (collected.immediate === true) {
+  const perPostTimes = collected.perPostTimes as unknown;
+  if (Array.isArray(perPostTimes) && perPostTimes.length) {
+    parts.push(`timing=per_post(${perPostTimes.length} times)`);
+  } else if (collected.immediate === true) {
     parts.push('timing=now');
   } else if (typeof collected.startTime === 'string' && collected.startTime) {
     parts.push(`timing=${collected.startTime}`);
