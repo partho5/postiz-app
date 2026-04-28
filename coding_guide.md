@@ -1473,7 +1473,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 #### E.1 — Scheduling/posts band
 1. [x] **Fix the immediate bug** — add `read_time_slots` + relax emission so empty results get a natural reply.
 2. [x] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
-3. [ ] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
+3. [x] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
 4. [ ] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
 5. [ ] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
 6. [ ] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
@@ -1545,12 +1545,34 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 **Out of scope:** Enforcing blackout windows in `SlotSchedulerService` (future); `list_drafts`, `read_draft` (E.3).
 
+#### F.E.3 — Drafts/stack CRUD (`list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft`, `reject_draft`)
+
+**Goal:** Give the LLM full read/write control over the `ApPostCandidate` (draft) queue so users can inspect, edit, and triage pending posts via chat.
+
+**Files:**
+- NEW `orchestrator/tools/list_drafts.ts` + `.spec.ts` — list PENDING candidates, optional platform/limit filter; pure read, LLM narrates
+- NEW `orchestrator/tools/read_draft.ts` + `.spec.ts` — return one candidate by ID with full content and metadata; pure read
+- NEW `orchestrator/tools/edit_draft.ts` + `.spec.ts` — update `content` on a PENDING candidate; guards non-PENDING; emits `action_result`
+- NEW `orchestrator/tools/delete_draft.ts` + `.spec.ts` — soft-delete by setting status to FAILED + metadata `{ deleted_by: 'user' }`; emits `action_result`
+- NEW `orchestrator/tools/approve_draft.ts` + `.spec.ts` — boost PENDING candidate `priority` to 100 and stamp `metadata.approved_at`; emits `action_result`
+- NEW `orchestrator/tools/reject_draft.ts` + `.spec.ts` — set status FAILED + metadata `{ rejected_by: 'user' }`; emits `action_result`
+- MOD `orchestrator/tools/index.ts` — register 6 new tools
+
+**Definition of done:**
+- All tools are tenant-scoped (`organizationId: ctx.org.id` on every query)
+- Write tools guard status: edit/approve reject if status ≠ PENDING; delete/reject also accept SCHEDULED
+- No new Prisma schema changes (existing `ApPostCandidate` + `ApPostCandidateStatus` suffice)
+- All autopilot tests green; each tool ≥ 5 spec cases
+
+**Out of scope:** `read_calendar_view`, `compute_best_times` (E.4); bulk approve, move_draft_platform, lock_draft (future).
+
 ---
 
 ### G. Roadmap build log
 
 2026-04-28 | E.1 | orchestrator/tools/read_time_slots.ts, read_time_slots.spec.ts, orchestrator/tools/index.ts, orchestrator/types.ts, agents/orchestrator.ts, orchestrator/tools/list_scheduled_posts.ts
 2026-04-28 | E.2 | schema.prisma (ApBlackoutWindow), orchestrator/tools/{update_time_slots,update_posts_per_day,pause_all,set_blackout_window,set_frequency_cap}.ts + *.spec.ts, tools/index.ts
+2026-04-28 | E.3 | orchestrator/tools/{list_drafts,read_draft,edit_draft,delete_draft,approve_draft,reject_draft}.ts + *.spec.ts, tools/index.ts
 
 ---
 

@@ -37,6 +37,12 @@ import { createUpdatePostsPerDayTool } from './update_posts_per_day';
 import { createPauseAllTool } from './pause_all';
 import { createSetBlackoutWindowTool } from './set_blackout_window';
 import { createSetFrequencyCapTool } from './set_frequency_cap';
+import { createListDraftsTool } from './list_drafts';
+import { createReadDraftTool } from './read_draft';
+import { createEditDraftTool } from './edit_draft';
+import { createDeleteDraftTool } from './delete_draft';
+import { createApproveDraftTool } from './approve_draft';
+import { createRejectDraftTool } from './reject_draft';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -81,6 +87,13 @@ export function buildOrchestratorTools(
     createPauseAllTool({ cadenceConfig: deps.cadenceConfig }) as OrchestratorTool<unknown, unknown>,
     createSetBlackoutWindowTool() as OrchestratorTool<unknown, unknown>,
     createSetFrequencyCapTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.3 — drafts/stack CRUD ────────────────────────────────────────
+    createListDraftsTool() as OrchestratorTool<unknown, unknown>,
+    createReadDraftTool() as OrchestratorTool<unknown, unknown>,
+    createEditDraftTool() as OrchestratorTool<unknown, unknown>,
+    createDeleteDraftTool() as OrchestratorTool<unknown, unknown>,
+    createApproveDraftTool() as OrchestratorTool<unknown, unknown>,
+    createRejectDraftTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -111,4 +124,10 @@ export {
   createPauseAllTool,
   createSetBlackoutWindowTool,
   createSetFrequencyCapTool,
+  createListDraftsTool,
+  createReadDraftTool,
+  createEditDraftTool,
+  createDeleteDraftTool,
+  createApproveDraftTool,
+  createRejectDraftTool,
 };
