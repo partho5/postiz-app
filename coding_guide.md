@@ -1476,7 +1476,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 3. [x] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
 4. [x] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
 5. [x] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
-6. [ ] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
+6. [x] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
 7. [ ] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
 8. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
 
@@ -1598,6 +1598,32 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 ---
 
+#### F.E.6 — Publishing reliability (`list_publish_errors`, `retry_publish`, `quarantine_post`)
+
+**Goal:** Give the LLM visibility into and control over failed/skipped publishing events so users can see what went wrong and take corrective action (retry or quarantine) from chat.
+
+**Data sources (all existing — no new schema):**
+- `ApScheduledSlot.status = SKIPPED` rows carry `metadata.skipReason`; these are the primary "failed publish" signal (slot fired but publishing was skipped due to no integration, empty stack, or an unhandled error)
+- `ApPostCandidate.status = FAILED` with `metadata.quarantined` flag for quarantine state
+- Postiz `Post.state = ERROR` linked via `ApPublishedPost.postizPostId` (secondary — platform-level errors)
+
+**Files:**
+- NEW `orchestrator/tools/list_publish_errors.ts` + `.spec.ts` — lists SKIPPED slots (+ optionally ERROR Postiz posts) for the tenant; optional `platform` + `limit`; pure read, LLM narrates
+- NEW `orchestrator/tools/retry_publish.ts` + `.spec.ts` — given a SKIPPED slot ID, creates a fresh PENDING `ApScheduledSlot` for the same `(org, platform)` at a specified `when` (or now + 5 min); emits `action_result`
+- NEW `orchestrator/tools/quarantine_post.ts` + `.spec.ts` — marks a PENDING `ApPostCandidate` as `FAILED` with `metadata.quarantined = true`; prevents it from ever being popped again; emits `action_result`
+- MOD `orchestrator/tools/index.ts` — register 3 new tools
+
+**Definition of done:**
+- `list_publish_errors`: accepts optional `platform`, `limit` (1–50, default 20), `lookbackDays` (1–90, default 7); returns SKIPPED slots with `skipReason`, platform, `scheduledAt`; observation is a numbered list; description distinguishes from `list_scheduled_posts`
+- `retry_publish`: accepts `slotId` (SKIPPED slot to retry), optional `when` (parsed via `parseTimeExpression`; defaults to now + 5 minutes); guards against retrying non-SKIPPED slots; creates new PENDING slot; emits `action_result`; observation confirms new slot time
+- `quarantine_post`: accepts `candidateId`, optional `reason`; guards against quarantining non-PENDING candidates; sets `status = FAILED`, `metadata.quarantined = true`, `metadata.quarantineReason`; emits `action_result`
+- No new Prisma schema; no new migrations
+- All autopilot tests green; each tool ≥ 5 spec cases
+
+**Out of scope:** Automatic retry cron (future), platform-level error codes from Postiz `Post.state = ERROR` (surface is incomplete without integration-specific parsing), bulk retry (future), unquarantine/restore (future).
+
+---
+
 #### F.E.4 — Calendar & best-time (`read_calendar_view`, `compute_best_times`)
 
 **Goal:** Give the LLM two new read-only scheduling-intelligence tools: a calendar view that shows scheduled posts grouped by day, and a best-time advisor that analyses the tenant's posting history to recommend optimal hours per platform.
@@ -1625,6 +1651,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 2026-04-28 | E.3 | orchestrator/tools/{list_drafts,read_draft,edit_draft,delete_draft,approve_draft,reject_draft}.ts + *.spec.ts, tools/index.ts
 2026-04-29 | E.4 | orchestrator/tools/{read_calendar_view,compute_best_times}.ts + *.spec.ts, tools/index.ts; 565 autopilot tests green (+18)
 2026-04-29 | E.5 | orchestrator/tools/{draft_thread,draft_carousel,draft_longform,draft_poll,apply_brand_voice,suggest_hashtags,translate_post}.ts + *.spec.ts, tools/index.ts; 610 autopilot tests green (+45)
+2026-04-29 | E.6 | orchestrator/tools/{list_publish_errors,retry_publish,quarantine_post}.ts + *.spec.ts, tools/index.ts; 634 autopilot tests green (+24)
 
 ---
 

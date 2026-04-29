@@ -45,6 +45,9 @@ import { createApproveDraftTool } from './approve_draft';
 import { createRejectDraftTool } from './reject_draft';
 import { createReadCalendarViewTool } from './read_calendar_view';
 import { createComputeBestTimesTool } from './compute_best_times';
+import { createListPublishErrorsTool } from './list_publish_errors';
+import { createRetryPublishTool } from './retry_publish';
+import { createQuarantinePostTool } from './quarantine_post';
 import { createDraftThreadTool } from './draft_thread';
 import { createDraftCarouselTool } from './draft_carousel';
 import { createDraftLongformTool } from './draft_longform';
@@ -106,6 +109,10 @@ export function buildOrchestratorTools(
     // ── Slice E.4 — calendar & best-time ─────────────────────────────────────
     createReadCalendarViewTool() as OrchestratorTool<unknown, unknown>,
     createComputeBestTimesTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.6 — publishing reliability ───────────────────────────────────
+    createListPublishErrorsTool() as OrchestratorTool<unknown, unknown>,
+    createRetryPublishTool() as OrchestratorTool<unknown, unknown>,
+    createQuarantinePostTool() as OrchestratorTool<unknown, unknown>,
     // ── Slice E.5 — content creation expansion ────────────────────────────────
     createDraftThreadTool() as OrchestratorTool<unknown, unknown>,
     createDraftCarouselTool() as OrchestratorTool<unknown, unknown>,
@@ -152,6 +159,9 @@ export {
   createRejectDraftTool,
   createReadCalendarViewTool,
   createComputeBestTimesTool,
+  createListPublishErrorsTool,
+  createRetryPublishTool,
+  createQuarantinePostTool,
   createDraftThreadTool,
   createDraftCarouselTool,
   createDraftLongformTool,
