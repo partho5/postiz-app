@@ -1478,26 +1478,27 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 5. [x] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
 6. [x] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
 7. [x] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
-8. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
+8. [ ] **Writing prompts collection** — `ApWritingPrompt` DB model + CRUD tools (`list_writing_prompts`, `add_writing_prompt`, `edit_writing_prompt`, `delete_writing_prompt`, `toggle_writing_prompt`); copywriter injects all active prompts into system prompt; `COPYWRITING_MODEL_IDS` developer constant for model switching. (multi-slice)
+9. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
 
 #### E.2 — Configs band
-9. [ ] **Growth rules CRUD** — `read_growth_rules`, `upsert_growth_rule`, `delete_growth_rule`.
-10. [ ] **Profile & brand voice** — `read_brand_voice`, `update_brand_voice`, `update_anti_patterns`, `update_regulatory_flags`, `set_objective`, `set_target_audience_geo`.
-11. [ ] **Settings, accounts & docs** — `read_all_settings`, `set_notification_prefs`, `set_post_language`, `list_accounts`, `connect_account` / `disconnect_account`, `add_faq_entry`, `add_brand_asset`.
-12. [ ] **Compliance & approvals** — `check_brand_safety`, `check_duplicates`, `check_nsfw`, `enforce_disclosure`, `require_human_approval`, `read_audit_log`.
-13. [ ] **Memory & feedback loops** — `record_negative_feedback`, `record_positive_feedback`, `propose_strategy_review`.
-14. [ ] **Conversation UX polish** — `confirm_with_user`, `report_progress`.
+10. [ ] **Growth rules CRUD** — `read_growth_rules`, `upsert_growth_rule`, `delete_growth_rule`.
+11. [ ] **Profile & brand voice** — `read_brand_voice`, `update_brand_voice`, `update_anti_patterns`, `update_regulatory_flags`, `set_objective`, `set_target_audience_geo`.
+12. [ ] **Settings, accounts & docs** — `read_all_settings`, `set_notification_prefs`, `set_post_language`, `list_accounts`, `connect_account` / `disconnect_account`, `add_faq_entry`, `add_brand_asset`.
+13. [ ] **Compliance & approvals** — `check_brand_safety`, `check_duplicates`, `check_nsfw`, `enforce_disclosure`, `require_human_approval`, `read_audit_log`.
+14. [ ] **Memory & feedback loops** — `record_negative_feedback`, `record_positive_feedback`, `propose_strategy_review`.
+15. [ ] **Conversation UX polish** — `confirm_with_user`, `report_progress`.
 
 #### E.3 — Analytics, listening & community band
-15. [ ] **Analytics deep dive** — `top_posts`, `bottom_posts`, `engagement_trend`, `engagement_heatmap`, `hashtag_performance`, `audience_growth`, `audience_demographics`, `consolidated_report`. (multi-slice)
-16. [ ] **A/B + reporting** — `start_ab_test`, `ab_test_result`, `export_report`, `send_report_email`, `compute_roi`, `conversion_funnel`. (multi-slice)
-17. [ ] **Listening** — `add_mention_alert`, `read_mentions`, `read_sentiment`, `track_competitors`, `track_keyword`, `detect_viral_moment`, `detect_crisis`. (multi-slice)
-18. [ ] **Community inbound** — DMs + comments read/reply/moderate. (multi-slice)
-19. [ ] **Community outbound** — `engage_like`, `engage_comment`, `follow_account`/`unfollow_account`, `reshare_post`, `send_outreach_dm`, `manage_target_list`. (multi-slice)
-20. [ ] **CRM & influencer** — `capture_lead`, `sync_to_crm`, `tag_contact`, `find_influencers`, `track_partner_utm`. (multi-slice)
+16. [ ] **Analytics deep dive** — `top_posts`, `bottom_posts`, `engagement_trend`, `engagement_heatmap`, `hashtag_performance`, `audience_growth`, `audience_demographics`, `consolidated_report`. (multi-slice)
+17. [ ] **A/B + reporting** — `start_ab_test`, `ab_test_result`, `export_report`, `send_report_email`, `compute_roi`, `conversion_funnel`. (multi-slice)
+18. [ ] **Listening** — `add_mention_alert`, `read_mentions`, `read_sentiment`, `track_competitors`, `track_keyword`, `detect_viral_moment`, `detect_crisis`. (multi-slice)
+19. [ ] **Community inbound** — DMs + comments read/reply/moderate. (multi-slice)
+20. [ ] **Community outbound** — `engage_like`, `engage_comment`, `follow_account`/`unfollow_account`, `reshare_post`, `send_outreach_dm`, `manage_target_list`. (multi-slice)
+21. [ ] **CRM & influencer** — `capture_lead`, `sync_to_crm`, `tag_contact`, `find_influencers`, `track_partner_utm`. (multi-slice)
 
 #### E.4 — Paid band (last)
-21. [ ] **Paid / boosting** — `boost_post`, `set_ad_budget`, `read_ad_performance`, `pause_ads`. (multi-slice)
+22. [ ] **Paid / boosting** — `boost_post`, `set_ad_budget`, `read_ad_performance`, `pause_ads`. (multi-slice)
 
 ---
 
@@ -1618,6 +1619,69 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 - All autopilot tests green; each tool ≥ 5 spec cases
 
 **Out of scope:** `mine_faq_content`, `pull_headlines_rss`, `find_hashtags` (future); scheduling the generated calendar (user would follow up with `schedule_post`); `fetch_trending` integrations beyond Tavily (Reddit, Twitter trends — future).
+
+---
+
+#### F.E.8 — Writing prompts collection + copywriter model constant
+
+**Goal:** Allow users (via chat) to build and manage a personal library of long writing-instruction prompts. The copywriter injects every active prompt into its system prompt when generating posts/articles. If the user has never set a prompt and requests content, the AI auto-generates one from their business profile and saves it — so there is always at least one. A named developer constant controls which LLM model the copywriter uses; no UI, no DB column needed for this.
+
+**Background on "writing prompts":**
+A writing prompt here is not a post topic — it is a long instruction block that shapes _how_ content is written. Examples:
+- "Always open with a contrarian hook. Use first-person. End every post with a soft CTA to our free trial. Never use the word 'leverage'."
+- "Write LinkedIn posts as a seasoned VC reflecting on portfolio lessons. Keep paragraphs to 2 sentences max."
+
+Multiple active prompts are concatenated in ordinal order and fed as a block into the copywriter system prompt under an "Additional writing instructions" heading.
+
+**Schema changes (`schema.prisma`):**
+```prisma
+enum ApPromptSource {
+  USER
+  AI
+}
+
+model ApWritingPrompt {
+  id             String          @id @default(uuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  label          String?         // optional human-readable name, e.g. "VC voice"
+  content        String          // @db.Text — no length cap; can be very long
+  source         ApPromptSource  // USER | AI
+  active         Boolean         @default(true)
+  ordinal        Int             @default(0)  // ascending = injection order
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([organizationId])
+  @@map("ap_writing_prompt")
+}
+```
+
+**Files:**
+- MOD `schema.prisma` — add `ApPromptSource` enum + `ApWritingPrompt` model + `Organization` back-relation
+- NEW migration via `prisma migrate dev`
+- NEW `autopilot/memory/writing-prompts.ts` — helpers: `getActiveWritingPrompts(db, orgId): Promise<ApWritingPrompt[]>`, `autoGenerateAndSavePrompt(db, orgId, profile, llm)`
+- MOD `agents/copywriter.ts` — (a) export `COPYWRITING_MODEL_IDS: string[]` constant at top of file (default `['claude-sonnet-4-6', 'claude-opus-4-7']`; copywriter picks first available); (b) `buildSystemPrompt` receives `writingPrompts: string[]` and appends them under "Additional writing instructions"; (c) `runCopywriter` loads active prompts from DB, auto-generates one if none exist
+- NEW `orchestrator/tools/list_writing_prompts.ts` + `.spec.ts` — reads all `ApWritingPrompt` rows for the org, returns id/label/source/active/ordinal/snippet (first 120 chars); pure read
+- NEW `orchestrator/tools/add_writing_prompt.ts` + `.spec.ts` — accepts `content` (required, the full prompt text), optional `label`, optional `active` (default true); saves as `ApPromptSource.USER`; if `content` is omitted/empty, triggers `autoGenerateAndSavePrompt` instead; emits `action_result`
+- NEW `orchestrator/tools/edit_writing_prompt.ts` + `.spec.ts` — accepts `promptId`, optional `content`, optional `label`, optional `ordinal`; updates matching prompt; emits `action_result`
+- NEW `orchestrator/tools/delete_writing_prompt.ts` + `.spec.ts` — accepts `promptId`; hard deletes; emits `action_result`
+- NEW `orchestrator/tools/toggle_writing_prompt.ts` + `.spec.ts` — accepts `promptId`, `active: boolean`; flips active flag; emits `action_result`
+- MOD `orchestrator/tools/index.ts` — register 5 new tools
+
+**Definition of done:**
+- `COPYWRITING_MODEL_IDS` is a single exported `string[]` constant in `copywriter.ts`; swapping model requires editing one line
+- `list_writing_prompts`: returns all prompts for org (active + inactive); observation is a numbered list with id, label, source tag, active status, and content snippet
+- `add_writing_prompt`: saves user prompt or auto-generates+saves AI prompt; observation confirms save with assigned ID; emits `action_result`; spec covers both paths (explicit content, auto-generate)
+- `edit_writing_prompt`: partial update (any subset of content/label/ordinal); guards against unknown promptId; emits `action_result`
+- `delete_writing_prompt`: hard delete; guards against unknown ID; emits `action_result`
+- `toggle_writing_prompt`: sets active flag; guards against unknown ID; emits `action_result`; description distinguishes from delete
+- `buildSystemPrompt` receives `writingPrompts` array and appends non-empty entries under a clear heading; when array is empty the section is omitted
+- `runCopywriter` calls `getActiveWritingPrompts`; if result is empty, calls `autoGenerateAndSavePrompt` then retries
+- `autoGenerateAndSavePrompt` uses `generateObject` to produce a 2–5 sentence writing style guide from the business profile, saves it with `source: AI`, returns the content
+- All autopilot tests green; each tool ≥ 5 spec cases; copywriter spec covers prompt-injection path
+
+**Out of scope:** Per-tool or per-platform prompt overrides (future); UI for prompt management (handled via chat only for now); prompt versioning/history; prompt length limits (DB `Text` has no practical cap); model-switching UI (dev constant only).
 
 ---
 
