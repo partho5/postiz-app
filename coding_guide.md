@@ -1475,7 +1475,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 2. [x] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
 3. [x] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
 4. [x] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
-5. [ ] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
+5. [x] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
 6. [ ] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
 7. [ ] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
 8. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
@@ -1566,6 +1566,38 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 **Out of scope:** `read_calendar_view`, `compute_best_times` (E.4); bulk approve, move_draft_platform, lock_draft (future).
 
+#### F.E.5 — Content creation expansion (`draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`)
+
+**Goal:** Add seven content-generation tools to the orchestrator so users can create rich post formats (threads, carousels, long-form, polls) and request post-processing (brand-voice application, hashtag suggestions, translation) via chat.
+
+**Files:**
+- NEW `orchestrator/tools/draft_thread.ts` + `.spec.ts` — generate N connected thread posts via LLM (uses `ctx.llm.model` + `generateObject`); push each part as a separate `ApPostCandidate` with `metadata.threadId` linking them; emits `action_result`
+- NEW `orchestrator/tools/draft_carousel.ts` + `.spec.ts` — generate carousel slides (title + body text per slide) via LLM; push as single candidate with `contentVariants.slides`; emits `action_result`
+- NEW `orchestrator/tools/draft_longform.ts` + `.spec.ts` — generate long-form post (LinkedIn article / Facebook note) via LLM; push as single candidate; emits `action_result`
+- NEW `orchestrator/tools/draft_poll.ts` + `.spec.ts` — no LLM; formats user-supplied question + options as poll metadata; push as candidate with `metadata.poll`; emits `action_result`
+- NEW `orchestrator/tools/apply_brand_voice.ts` + `.spec.ts` — load profile via `getStructuredProfile`; rewrite supplied content via LLM to match brand voice + platform; pure read (returns rewritten text, no stack push)
+- NEW `orchestrator/tools/suggest_hashtags.ts` + `.spec.ts` — given content + platform, return 3–10 suggested hashtags via LLM; pure read (returns list, no stack push)
+- NEW `orchestrator/tools/translate_post.ts` + `.spec.ts` — translate content to target language via LLM; pure read (returns translated text, no stack push)
+- MOD `orchestrator/tools/index.ts` — register 7 new tools
+
+**Definition of done:**
+- `draft_thread`: accepts `topic`, `platform` (default `'twitter'`), `threadLength` (2–10, default 5), optional `guidelines`; generates structurally cohesive thread parts; pushes each as a separate PENDING candidate; `metadata.threadId` is shared across parts; observation names how many parts were pushed
+- `draft_carousel`: accepts `topic`, `platform` (default `'instagram'`), `slideCount` (2–10, default 5), optional `guidelines`; generates `{title, text}` per slide; pushes single candidate; observation names platform and slide count
+- `draft_longform`: accepts `topic`, `platform` (default `'linkedin'`), optional `guidelines`, optional `wordCount` (200–3000, default 800); generates body text; pushes single candidate; observation confirms push
+- `draft_poll`: accepts `question: string`, `options: string[]` (2–4 items), `platform`; no LLM; validates option count; pushes candidate with `metadata.poll = { question, options }`; emits `action_result`
+- `apply_brand_voice`: accepts `content`, `platform`, optional `guidelines`; gracefully falls back to minimal profile when no business profile exists; returns rewritten content in observation (no stack push)
+- `suggest_hashtags`: accepts `content`, `platform`, optional `count` (3–10, default 5); returns hashtag list; observation is comma-separated list (no stack push)
+- `translate_post`: accepts `content`, `targetLanguage`, optional `sourcePlatform`; returns translated content in observation (no stack push)
+- Stack-push tools use `push()` from `../../stack` with `source='chat_agent'` and `priority=10`
+- All LLM calls use `ctx.llm.model` with `generateObject` from `ai-v5`; profile reads cast `ctx.db as unknown as PrismaClient`
+- All tools are tenant-scoped
+- No new Prisma schema changes
+- All autopilot tests green; each tool ≥ 5 spec cases
+
+**Out of scope:** Bulk thread scheduling, carousel image generation (future `wantsImage` wiring), `draft_reply` / `draft_quote_tweet` (future), `vary_post_style` / `add_utm_link` (future), publishing wiring for polls (platform-specific API — no Postiz poll support yet).
+
+---
+
 #### F.E.4 — Calendar & best-time (`read_calendar_view`, `compute_best_times`)
 
 **Goal:** Give the LLM two new read-only scheduling-intelligence tools: a calendar view that shows scheduled posts grouped by day, and a best-time advisor that analyses the tenant's posting history to recommend optimal hours per platform.
@@ -1592,6 +1624,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 2026-04-28 | E.2 | schema.prisma (ApBlackoutWindow), orchestrator/tools/{update_time_slots,update_posts_per_day,pause_all,set_blackout_window,set_frequency_cap}.ts + *.spec.ts, tools/index.ts
 2026-04-28 | E.3 | orchestrator/tools/{list_drafts,read_draft,edit_draft,delete_draft,approve_draft,reject_draft}.ts + *.spec.ts, tools/index.ts
 2026-04-29 | E.4 | orchestrator/tools/{read_calendar_view,compute_best_times}.ts + *.spec.ts, tools/index.ts; 565 autopilot tests green (+18)
+2026-04-29 | E.5 | orchestrator/tools/{draft_thread,draft_carousel,draft_longform,draft_poll,apply_brand_voice,suggest_hashtags,translate_post}.ts + *.spec.ts, tools/index.ts; 610 autopilot tests green (+45)
 
 ---
 

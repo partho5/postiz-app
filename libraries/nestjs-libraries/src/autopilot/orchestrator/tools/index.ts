@@ -45,6 +45,13 @@ import { createApproveDraftTool } from './approve_draft';
 import { createRejectDraftTool } from './reject_draft';
 import { createReadCalendarViewTool } from './read_calendar_view';
 import { createComputeBestTimesTool } from './compute_best_times';
+import { createDraftThreadTool } from './draft_thread';
+import { createDraftCarouselTool } from './draft_carousel';
+import { createDraftLongformTool } from './draft_longform';
+import { createDraftPollTool } from './draft_poll';
+import { createApplyBrandVoiceTool } from './apply_brand_voice';
+import { createSuggestHashtagsTool } from './suggest_hashtags';
+import { createTranslatePostTool } from './translate_post';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -99,6 +106,14 @@ export function buildOrchestratorTools(
     // ── Slice E.4 — calendar & best-time ─────────────────────────────────────
     createReadCalendarViewTool() as OrchestratorTool<unknown, unknown>,
     createComputeBestTimesTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.5 — content creation expansion ────────────────────────────────
+    createDraftThreadTool() as OrchestratorTool<unknown, unknown>,
+    createDraftCarouselTool() as OrchestratorTool<unknown, unknown>,
+    createDraftLongformTool() as OrchestratorTool<unknown, unknown>,
+    createDraftPollTool() as OrchestratorTool<unknown, unknown>,
+    createApplyBrandVoiceTool() as OrchestratorTool<unknown, unknown>,
+    createSuggestHashtagsTool() as OrchestratorTool<unknown, unknown>,
+    createTranslatePostTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -137,4 +152,11 @@ export {
   createRejectDraftTool,
   createReadCalendarViewTool,
   createComputeBestTimesTool,
+  createDraftThreadTool,
+  createDraftCarouselTool,
+  createDraftLongformTool,
+  createDraftPollTool,
+  createApplyBrandVoiceTool,
+  createSuggestHashtagsTool,
+  createTranslatePostTool,
 };
