@@ -1477,7 +1477,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 4. [x] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
 5. [x] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
 6. [x] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
-7. [ ] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
+7. [x] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
 8. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
 
 #### E.2 — Configs band
@@ -1598,6 +1598,29 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 ---
 
+#### F.E.7 — Ideation tools (`suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`)
+
+**Goal:** Give the LLM four content-ideation tools so users can get topic ideas, discover trending subjects, plan a content calendar, and repurpose existing pieces across formats — all from chat.
+
+**Files:**
+- NEW `orchestrator/tools/suggest_topics.ts` + `.spec.ts` — loads profile (niche, goals) and upcoming scheduled slots; uses LLM to generate N topic ideas that fill calendar gaps; pure read, no stack push
+- NEW `orchestrator/tools/fetch_trending.ts` + `.spec.ts` — searches for trending topics in the tenant's niche via `searchTavily`; gracefully falls back to LLM-only suggestions when `AP_TAVILY_API_KEY` absent; pure read
+- NEW `orchestrator/tools/generate_content_calendar.ts` + `.spec.ts` — uses LLM to produce a N-week content calendar (topic + format + platform per slot); pure read, LLM narrates
+- NEW `orchestrator/tools/repurpose_content.ts` + `.spec.ts` — takes existing content text and target formats (`'thread'|'carousel'|'short'|'longform'`); generates a repurposed version per format via LLM; optionally pushes results to stack; emits `action_result` when pushing, otherwise pure read
+- MOD `orchestrator/tools/index.ts` — register 4 new tools
+
+**Definition of done:**
+- `suggest_topics`: accepts `count` (1–20, default 5), optional `platform`, optional `theme` hint; observation is a numbered list of topic ideas with a brief rationale; falls back gracefully when no profile exists
+- `fetch_trending`: accepts `niche` (overrides profile niche), optional `platform`, optional `count` (3–10, default 5); calls `searchTavily` when key present; on error/missing key falls back to LLM brainstorm; observation is a numbered list
+- `generate_content_calendar`: accepts `weeks` (1–4, default 2), optional `platform`, optional `postsPerWeek` (1–7, default 3); LLM generates structured list of `{week, topic, format, platform}`; observation is a formatted calendar preview
+- `repurpose_content`: accepts `content` (original text), `targetFormats` (array of `'thread'|'carousel'|'short'|'longform'`, at least 1), optional `platform`, optional `pushToDraft` (bool, default false); when `pushToDraft=true`, pushes each repurposed version as a PENDING candidate and emits `action_result`; otherwise pure read
+- No new Prisma schema; no new migrations
+- All autopilot tests green; each tool ≥ 5 spec cases
+
+**Out of scope:** `mine_faq_content`, `pull_headlines_rss`, `find_hashtags` (future); scheduling the generated calendar (user would follow up with `schedule_post`); `fetch_trending` integrations beyond Tavily (Reddit, Twitter trends — future).
+
+---
+
 #### F.E.6 — Publishing reliability (`list_publish_errors`, `retry_publish`, `quarantine_post`)
 
 **Goal:** Give the LLM visibility into and control over failed/skipped publishing events so users can see what went wrong and take corrective action (retry or quarantine) from chat.
@@ -1652,6 +1675,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 2026-04-29 | E.4 | orchestrator/tools/{read_calendar_view,compute_best_times}.ts + *.spec.ts, tools/index.ts; 565 autopilot tests green (+18)
 2026-04-29 | E.5 | orchestrator/tools/{draft_thread,draft_carousel,draft_longform,draft_poll,apply_brand_voice,suggest_hashtags,translate_post}.ts + *.spec.ts, tools/index.ts; 610 autopilot tests green (+45)
 2026-04-29 | E.6 | orchestrator/tools/{list_publish_errors,retry_publish,quarantine_post}.ts + *.spec.ts, tools/index.ts; 634 autopilot tests green (+24)
+2026-04-29 | E.7 | orchestrator/tools/{suggest_topics,fetch_trending,generate_content_calendar,repurpose_content}.ts + *.spec.ts, tools/index.ts; 670 autopilot tests green (+36)
 
 ---
 

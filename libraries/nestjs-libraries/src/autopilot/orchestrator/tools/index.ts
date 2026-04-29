@@ -55,6 +55,10 @@ import { createDraftPollTool } from './draft_poll';
 import { createApplyBrandVoiceTool } from './apply_brand_voice';
 import { createSuggestHashtagsTool } from './suggest_hashtags';
 import { createTranslatePostTool } from './translate_post';
+import { createSuggestTopicsTool } from './suggest_topics';
+import { createFetchTrendingTool } from './fetch_trending';
+import { createGenerateContentCalendarTool } from './generate_content_calendar';
+import { createRepurposeContentTool } from './repurpose_content';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -121,6 +125,11 @@ export function buildOrchestratorTools(
     createApplyBrandVoiceTool() as OrchestratorTool<unknown, unknown>,
     createSuggestHashtagsTool() as OrchestratorTool<unknown, unknown>,
     createTranslatePostTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.7 — ideation tools ────────────────────────────────────────────
+    createSuggestTopicsTool() as OrchestratorTool<unknown, unknown>,
+    createFetchTrendingTool() as OrchestratorTool<unknown, unknown>,
+    createGenerateContentCalendarTool() as OrchestratorTool<unknown, unknown>,
+    createRepurposeContentTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -169,4 +178,8 @@ export {
   createApplyBrandVoiceTool,
   createSuggestHashtagsTool,
   createTranslatePostTool,
+  createSuggestTopicsTool,
+  createFetchTrendingTool,
+  createGenerateContentCalendarTool,
+  createRepurposeContentTool,
 };
