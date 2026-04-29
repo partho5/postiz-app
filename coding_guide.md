@@ -1474,7 +1474,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 1. [x] **Fix the immediate bug** — add `read_time_slots` + relax emission so empty results get a natural reply.
 2. [x] **Cadence CRUD** — `update_time_slots`, `update_posts_per_day`, `pause_all`, `set_blackout_window`, `set_frequency_cap`.
 3. [x] **Drafts/stack CRUD** — `list_drafts`, `read_draft`, `edit_draft`, `delete_draft`, `approve_draft` / `reject_draft`.
-4. [ ] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
+4. [x] **Calendar & best-time** — `read_calendar_view`, `compute_best_times`.
 5. [ ] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
 6. [ ] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
 7. [ ] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
@@ -1566,6 +1566,24 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 
 **Out of scope:** `read_calendar_view`, `compute_best_times` (E.4); bulk approve, move_draft_platform, lock_draft (future).
 
+#### F.E.4 — Calendar & best-time (`read_calendar_view`, `compute_best_times`)
+
+**Goal:** Give the LLM two new read-only scheduling-intelligence tools: a calendar view that shows scheduled posts grouped by day, and a best-time advisor that analyses the tenant's posting history to recommend optimal hours per platform.
+
+**Files:**
+- NEW `orchestrator/tools/read_calendar_view.ts` + `.spec.ts` — reads `ApScheduledSlot` rows for a date range, groups them by calendar day (in tenant timezone); pure read, LLM narrates
+- NEW `orchestrator/tools/compute_best_times.ts` + `.spec.ts` — reads `ApPublishedPost` rows for the last N days, buckets `publishedAt` by hour-of-day (tenant timezone), returns top-hours per platform; falls back to generic platform advice when no history exists
+- MOD `orchestrator/tools/index.ts` — register `createReadCalendarViewTool`, `createComputeBestTimesTool`
+
+**Definition of done:**
+- `read_calendar_view` accepts optional `startDate` (ISO date string, default today), `weeks` (1–8, default 2), and `platform` filter; returns slots grouped by date with platform + content snippet; observation is a compact day-by-day textual calendar
+- `compute_best_times` accepts optional `platform` and `lookbackDays` (7–90, default 30); when history exists, returns top 3 hours per platform sorted by publish frequency; when history is empty returns a hardcoded per-platform recommendation note; observation is a concise human-readable recommendation
+- Both tools are tenant-scoped (`organizationId: ctx.org.id` on every query)
+- No new Prisma schema changes — `ApScheduledSlot` and `ApPublishedPost` already exist
+- All autopilot tests green; each tool has ≥ 5 spec cases
+
+**Out of scope:** Calendar SSE card type (LLM narrates inline); analytics-weighted best times (requires per-post analytics join, complex — future); `enable_timezone_staggering` (separate future tool); `read_calendar_view` + `compute_best_times` descriptions include cross-links to prevent confusion with `list_scheduled_posts` and `read_time_slots`.
+
 ---
 
 ### G. Roadmap build log
@@ -1573,6 +1591,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 2026-04-28 | E.1 | orchestrator/tools/read_time_slots.ts, read_time_slots.spec.ts, orchestrator/tools/index.ts, orchestrator/types.ts, agents/orchestrator.ts, orchestrator/tools/list_scheduled_posts.ts
 2026-04-28 | E.2 | schema.prisma (ApBlackoutWindow), orchestrator/tools/{update_time_slots,update_posts_per_day,pause_all,set_blackout_window,set_frequency_cap}.ts + *.spec.ts, tools/index.ts
 2026-04-28 | E.3 | orchestrator/tools/{list_drafts,read_draft,edit_draft,delete_draft,approve_draft,reject_draft}.ts + *.spec.ts, tools/index.ts
+2026-04-29 | E.4 | orchestrator/tools/{read_calendar_view,compute_best_times}.ts + *.spec.ts, tools/index.ts; 565 autopilot tests green (+18)
 
 ---
 

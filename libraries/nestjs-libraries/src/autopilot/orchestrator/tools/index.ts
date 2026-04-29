@@ -43,6 +43,8 @@ import { createEditDraftTool } from './edit_draft';
 import { createDeleteDraftTool } from './delete_draft';
 import { createApproveDraftTool } from './approve_draft';
 import { createRejectDraftTool } from './reject_draft';
+import { createReadCalendarViewTool } from './read_calendar_view';
+import { createComputeBestTimesTool } from './compute_best_times';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -94,6 +96,9 @@ export function buildOrchestratorTools(
     createDeleteDraftTool() as OrchestratorTool<unknown, unknown>,
     createApproveDraftTool() as OrchestratorTool<unknown, unknown>,
     createRejectDraftTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.4 — calendar & best-time ─────────────────────────────────────
+    createReadCalendarViewTool() as OrchestratorTool<unknown, unknown>,
+    createComputeBestTimesTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -130,4 +135,6 @@ export {
   createDeleteDraftTool,
   createApproveDraftTool,
   createRejectDraftTool,
+  createReadCalendarViewTool,
+  createComputeBestTimesTool,
 };
