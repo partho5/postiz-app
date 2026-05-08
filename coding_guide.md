@@ -381,6 +381,22 @@ Format: `[ ] slice-id — one-line goal`. Check the box when Definition of done 
   - **Use this** in any tool/agent that takes a `when` argument before falling back to LLM disambiguation.
 - **SKILL_REGISTRY**: first entry registered — `rewrite_for_platform` in `autopilot/skills/index.ts`.
 
+### Key files added in slice E.8 — Writing prompts collection
+- **ApWritingPrompt model**: `schema.prisma` (`@@map("ap_writing_prompt")`). Enum `ApPromptSource`: `USER | AI`. Key fields: `organizationId` (FK → Organization), `label?`, `content` (full text, no length cap), `source (ApPromptSource)`, `active (Boolean default true)`, `ordinal (Int default 0)`. `@@index([organizationId])`.
+- **Writing-prompts helpers**: `autopilot/memory/writing-prompts.ts`. Exports:
+  - `getActiveWritingPrompts(db, orgId): Promise<ApWritingPrompt[]>` — reads active prompts ordered by `ordinal ASC`.
+  - `autoGenerateAndSavePrompt(db, orgId, llm): Promise<string>` — generates 2–5 sentence style guide from business profile via `generateObject`, saves with `source: AI`, returns content.
+- **Copywriter updated** (`agents/copywriter.ts`):
+  - `COPYWRITING_MODEL_IDS: string[]` — exported constant; first entry = active model (`['claude-sonnet-4-6', 'claude-opus-4-7']`).
+  - `buildSystemPrompt` now accepts `writingPrompts: string[]` 4th argument; non-empty prompts appended under "Additional writing instructions" heading.
+  - `runCopywriter` loads active prompts; calls `autoGenerateAndSavePrompt` and retries `getActiveWritingPrompts` if empty; non-fatal on error.
+- **5 new orchestrator tools** (`orchestrator/tools/`):
+  - `list_writing_prompts` — reads all prompts (active + inactive); pure read, LLM narrates.
+  - `add_writing_prompt` — saves USER prompt or triggers `autoGenerateAndSavePrompt`; emits `action_result`.
+  - `edit_writing_prompt` — partial update (content/label/ordinal); tenant-scoped guard; emits `action_result`.
+  - `delete_writing_prompt` — hard delete; tenant-scoped guard; emits `action_result`.
+  - `toggle_writing_prompt` — flips `active` flag; tenant-scoped guard; emits `action_result`.
+
 ### Key files added in Phase 4 — slice 4.6
 - **`tenant_strategy_optout` applier**: registered in `proposals.ts` at module load alongside `business_profile` and `growth_rule`. `changes.optedOut=true` → `apTenantStrategyOptout.upsert` (create if absent, no-op if present); `changes.optedOut=false` → `apTenantStrategyOptout.deleteMany` (idempotent). `changes.reason` stored when provided.
 - **Intent parser updated**: `tenant_strategy_optout` added to `ENTITIES` in the system prompt. LLM generates `targetId=null, changes:{optedOut:boolean}` for opt-in/out requests.
@@ -1478,7 +1494,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 5. [x] **Content creation expansion** — `draft_thread`, `draft_carousel`, `draft_longform`, `draft_poll`, `apply_brand_voice`, `suggest_hashtags`, `translate_post`. (multi-slice)
 6. [x] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
 7. [x] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
-8. [ ] **Writing prompts collection** — `ApWritingPrompt` DB model + CRUD tools (`list_writing_prompts`, `add_writing_prompt`, `edit_writing_prompt`, `delete_writing_prompt`, `toggle_writing_prompt`); copywriter injects all active prompts into system prompt; `COPYWRITING_MODEL_IDS` developer constant for model switching. (multi-slice)
+8. [x] **Writing prompts collection** — `ApWritingPrompt` DB model + CRUD tools (`list_writing_prompts`, `add_writing_prompt`, `edit_writing_prompt`, `delete_writing_prompt`, `toggle_writing_prompt`); copywriter injects all active prompts into system prompt; `COPYWRITING_MODEL_IDS` developer constant for model switching. (multi-slice)
 9. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
 
 #### E.2 — Configs band
@@ -1740,6 +1756,7 @@ model ApWritingPrompt {
 2026-04-29 | E.5 | orchestrator/tools/{draft_thread,draft_carousel,draft_longform,draft_poll,apply_brand_voice,suggest_hashtags,translate_post}.ts + *.spec.ts, tools/index.ts; 610 autopilot tests green (+45)
 2026-04-29 | E.6 | orchestrator/tools/{list_publish_errors,retry_publish,quarantine_post}.ts + *.spec.ts, tools/index.ts; 634 autopilot tests green (+24)
 2026-04-29 | E.7 | orchestrator/tools/{suggest_topics,fetch_trending,generate_content_calendar,repurpose_content}.ts + *.spec.ts, tools/index.ts; 670 autopilot tests green (+36)
+2026-05-08 | E.8 | schema.prisma (ApPromptSource enum + ApWritingPrompt model + Organization back-relation); memory/writing-prompts.ts (getActiveWritingPrompts, autoGenerateAndSavePrompt); agents/copywriter.ts (COPYWRITING_MODEL_IDS, buildSystemPrompt+writingPrompts, runCopywriter loads+auto-generates); orchestrator/tools/{list_writing_prompts,add_writing_prompt,edit_writing_prompt,delete_writing_prompt,toggle_writing_prompt}.ts + *.spec.ts; tools/index.ts; copywriter.spec.ts; 714 autopilot tests green (+44)
 
 ---
 
@@ -1814,6 +1831,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-24 | 1.3.g | done | apps/frontend/src/components/autopilot/chat-layout.tsx (ScheduledListMsg/ActionResultMsg/ConfirmMsg types; SSE switch cases for scheduled_list/action_result/confirm; done handler updated for specialEmitted; ScheduledListBubble with per-row Cancel+Reschedule actions; ActionResultBubble with green/red icon; ConfirmBubble with confirm/cancel buttons + API call; CheckIcon/XIcon SVGs; truncateText/formatScheduledAt helpers; MessageRow props extended; handleConfirmDecision/handlePrefillInput callbacks); typecheck green
 2026-04-25 | 1.3.f | done | orchestrator/tools/{update_business_profile,set_strategy_optout,save_memory,recall_memory,get_older_history}.ts + *.spec.ts (34 new tests); get_profile.spec.ts; tools/index.ts (18-tool registry); orchestrator/index.ts (re-exports 6 new factories); chat/chat.service.ts (removed parseIntent import + all intent-branching; removed _isCancellationMessage + _buildReplyPrompt; normal flow now calls runOrchestrator directly); chat/chat.service.spec.ts (rewritten to match orchestrator-only routing); 530 autopilot tests green (+34); profile/optout tools use createProposal pipeline (no direct writes)
 2026-04-24 | 1.3.e | done | orchestrator/tools/{analytics_snapshot,research_topic,scrape_competitor}.ts + *.spec.ts (31 new tests); tools/index.ts (12-tool registry); orchestrator/index.ts (re-exports 3 new factories); chat/chat.service.ts (resolve timezone from first active ApCadenceConfig, fallback UTC — fixes 1.3.e TODO); chat/chat.service.spec.ts (apCadenceConfig mock); agents/orchestrator.spec.ts (mock analytics_snapshot skill to break socialIntegrationList import chain under noImplicitReturns); 496 autopilot tests green (+31); analytics_snapshot bridges SkillContext + emits analytics_card; research_topic + scrape_competitor bridge AgentContext + catch errors gracefully
+2026-05-08 | E.8 | done | schema.prisma (ApPromptSource + ApWritingPrompt + Organization back-relation); db push applied; client regenerated; memory/writing-prompts.ts (getActiveWritingPrompts, autoGenerateAndSavePrompt); agents/copywriter.ts (COPYWRITING_MODEL_IDS exported, buildSystemPrompt accepts writingPrompts, runCopywriter loads+auto-generates prompts); orchestrator/tools/{list_writing_prompts,add_writing_prompt,edit_writing_prompt,delete_writing_prompt,toggle_writing_prompt}.ts + *.spec.ts; tools/index.ts (5 new tools registered); copywriter.spec.ts (writing-prompts + COPYWRITING_MODEL_IDS tests added); 714 autopilot tests green (+44)
 <!-- entries end -->
 
 ---

@@ -11,14 +11,26 @@ jest.mock('../memory', () => ({
   getStructuredProfile: jest.fn(),
   queryVector: jest.fn(),
 }));
+jest.mock('../memory/writing-prompts', () => ({
+  getActiveWritingPrompts: jest.fn(),
+  autoGenerateAndSavePrompt: jest.fn(),
+}));
 
 import { generateObject } from 'ai-v5';
 import type { LanguageModel } from 'ai-v5';
 import * as memoryModule from '../memory';
-import { runCopywriter, copywriterAgent } from './copywriter';
+import * as writingPromptsModule from '../memory/writing-prompts';
+import { runCopywriter, copywriterAgent, COPYWRITING_MODEL_IDS } from './copywriter';
 import type { CopywriterInput } from './copywriter';
 import type { AgentContext } from './types';
 import type { LlmProvider } from '../skills/types';
+
+const mockGetActiveWritingPrompts = writingPromptsModule.getActiveWritingPrompts as jest.MockedFunction<
+  typeof writingPromptsModule.getActiveWritingPrompts
+>;
+const mockAutoGenerateAndSavePrompt = writingPromptsModule.autoGenerateAndSavePrompt as jest.MockedFunction<
+  typeof writingPromptsModule.autoGenerateAndSavePrompt
+>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -109,6 +121,11 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockGetStructuredProfile.mockResolvedValue(MOCK_PROFILE);
   mockQueryVector.mockResolvedValue(MOCK_MEMORY);
+  // Default: one active writing prompt already exists
+  mockGetActiveWritingPrompts.mockResolvedValue([
+    { id: 'wp-1', content: 'Always open with a contrarian hook.', active: true, ordinal: 0 } as any,
+  ]);
+  mockAutoGenerateAndSavePrompt.mockResolvedValue('Generated style guide.');
 });
 
 // ---------------------------------------------------------------------------
@@ -372,6 +389,92 @@ describe('runCopywriter — guidelines', () => {
 
     const systemPrompt = mockGenerateObject.mock.calls[0][0].system as string;
     expect(systemPrompt).toContain('May 5th launch date');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Writing prompts injection
+// ---------------------------------------------------------------------------
+
+describe('runCopywriter — writing prompts', () => {
+  it('injects active writing prompts into system prompt', async () => {
+    stubLlmDrafts([{ content: 'Prompt-aware draft' }]);
+
+    await runCopywriter(makeCtx(), { platform: 'twitter', topic: 'test' });
+
+    const systemPrompt = mockGenerateObject.mock.calls[0][0].system as string;
+    expect(systemPrompt).toContain('Additional writing instructions');
+    expect(systemPrompt).toContain('Always open with a contrarian hook.');
+  });
+
+  it('auto-generates a prompt when none exist, then injects it', async () => {
+    // First call returns empty, second returns the generated prompt
+    mockGetActiveWritingPrompts
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 'wp-gen', content: 'Generated style guide.', active: true, ordinal: 0 } as any,
+      ]);
+    stubLlmDrafts([{ content: 'Draft after auto-generate' }]);
+
+    await runCopywriter(makeCtx(), { platform: 'linkedin', topic: 'test' });
+
+    expect(mockAutoGenerateAndSavePrompt).toHaveBeenCalled();
+    const systemPrompt = mockGenerateObject.mock.calls[0][0].system as string;
+    expect(systemPrompt).toContain('Generated style guide.');
+  });
+
+  it('skips writing-prompts section when prompts array is empty', async () => {
+    // Both calls return empty (auto-generate also returns empty in retry)
+    mockGetActiveWritingPrompts.mockResolvedValue([]);
+    mockAutoGenerateAndSavePrompt.mockResolvedValue('');
+    stubLlmDrafts([{ content: 'Draft without prompts' }]);
+
+    await runCopywriter(makeCtx(), { platform: 'twitter', topic: 'test' });
+
+    const systemPrompt = mockGenerateObject.mock.calls[0][0].system as string;
+    expect(systemPrompt).not.toContain('Additional writing instructions');
+  });
+
+  it('continues without prompts if writing-prompts module throws', async () => {
+    mockGetActiveWritingPrompts.mockRejectedValueOnce(new Error('DB error'));
+    stubLlmDrafts([{ content: 'Fallback draft' }]);
+
+    const result = await runCopywriter(makeCtx(), { platform: 'twitter', topic: 'test' });
+
+    expect(result.drafts).toHaveLength(1);
+  });
+
+  it('injects multiple prompts in ordinal order', async () => {
+    mockGetActiveWritingPrompts.mockResolvedValue([
+      { id: 'wp-1', content: 'First instruction.', active: true, ordinal: 0 } as any,
+      { id: 'wp-2', content: 'Second instruction.', active: true, ordinal: 1 } as any,
+    ]);
+    stubLlmDrafts([{ content: 'Multi-prompt draft' }]);
+
+    await runCopywriter(makeCtx(), { platform: 'twitter', topic: 'test' });
+
+    const systemPrompt = mockGenerateObject.mock.calls[0][0].system as string;
+    expect(systemPrompt).toContain('First instruction.');
+    expect(systemPrompt).toContain('Second instruction.');
+    expect(systemPrompt.indexOf('First instruction.')).toBeLessThan(
+      systemPrompt.indexOf('Second instruction.'),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COPYWRITING_MODEL_IDS constant
+// ---------------------------------------------------------------------------
+
+describe('COPYWRITING_MODEL_IDS', () => {
+  it('is exported and is an array of strings', () => {
+    expect(Array.isArray(COPYWRITING_MODEL_IDS)).toBe(true);
+    expect(COPYWRITING_MODEL_IDS.length).toBeGreaterThan(0);
+    COPYWRITING_MODEL_IDS.forEach((id) => expect(typeof id).toBe('string'));
+  });
+
+  it('first entry is a claude model', () => {
+    expect(COPYWRITING_MODEL_IDS[0]).toContain('claude');
   });
 });
 

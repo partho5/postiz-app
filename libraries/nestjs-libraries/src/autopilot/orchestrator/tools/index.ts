@@ -59,6 +59,11 @@ import { createSuggestTopicsTool } from './suggest_topics';
 import { createFetchTrendingTool } from './fetch_trending';
 import { createGenerateContentCalendarTool } from './generate_content_calendar';
 import { createRepurposeContentTool } from './repurpose_content';
+import { createListWritingPromptsTool } from './list_writing_prompts';
+import { createAddWritingPromptTool } from './add_writing_prompt';
+import { createEditWritingPromptTool } from './edit_writing_prompt';
+import { createDeleteWritingPromptTool } from './delete_writing_prompt';
+import { createToggleWritingPromptTool } from './toggle_writing_prompt';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
@@ -130,6 +135,12 @@ export function buildOrchestratorTools(
     createFetchTrendingTool() as OrchestratorTool<unknown, unknown>,
     createGenerateContentCalendarTool() as OrchestratorTool<unknown, unknown>,
     createRepurposeContentTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.8 — writing prompts ───────────────────────────────────────────
+    createListWritingPromptsTool() as OrchestratorTool<unknown, unknown>,
+    createAddWritingPromptTool() as OrchestratorTool<unknown, unknown>,
+    createEditWritingPromptTool() as OrchestratorTool<unknown, unknown>,
+    createDeleteWritingPromptTool() as OrchestratorTool<unknown, unknown>,
+    createToggleWritingPromptTool() as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -182,4 +193,9 @@ export {
   createFetchTrendingTool,
   createGenerateContentCalendarTool,
   createRepurposeContentTool,
+  createListWritingPromptsTool,
+  createAddWritingPromptTool,
+  createEditWritingPromptTool,
+  createDeleteWritingPromptTool,
+  createToggleWritingPromptTool,
 };

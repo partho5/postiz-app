@@ -64,6 +64,7 @@ model Organization {
   apTenantStrategyOptout  ApTenantStrategyOptout?
   apPendingAction         ApPendingAction?
   apBlackoutWindow        ApBlackoutWindow[]
+  apWritingPrompt         ApWritingPrompt[]
 }
 
 model Tags {
@@ -1277,4 +1278,25 @@ model ApBlackoutWindow {
   updatedAt      DateTime     @updatedAt
 
   @@map("ap_blackout_window")
+}
+
+enum ApPromptSource {
+  USER
+  AI
+}
+
+model ApWritingPrompt {
+  id             String         @id @default(uuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  label          String?
+  content        String
+  source         ApPromptSource
+  active         Boolean        @default(true)
+  ordinal        Int            @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([organizationId])
+  @@map("ap_writing_prompt")
 }

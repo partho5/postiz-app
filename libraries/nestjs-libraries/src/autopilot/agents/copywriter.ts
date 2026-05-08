@@ -23,7 +23,17 @@ import { generateObject } from 'ai-v5';
 import { z } from 'zod';
 import { PrismaClient } from '@prisma/client';
 import { getStructuredProfile, queryVector, type StructuredProfile, type VectorMemoryRow } from '../memory';
+import { getActiveWritingPrompts, autoGenerateAndSavePrompt } from '../memory/writing-prompts';
 import type { AgentDefinition, AgentContext } from './types';
+
+/**
+ * Developer constant — swap the first entry to change which model the
+ * copywriter uses. Order = preference; first available model wins.
+ */
+export const COPYWRITING_MODEL_IDS: string[] = [
+  'claude-sonnet-4-6',
+  'claude-opus-4-7',
+];
 
 // ---------------------------------------------------------------------------
 // Platform conventions
@@ -152,6 +162,7 @@ function buildSystemPrompt(
   platformSpec: PlatformSpec,
   profile: StructuredProfile | null,
   memoryContext: VectorMemoryRow[],
+  writingPrompts: string[],
   guidelines?: string,
 ): string {
   const sections: string[] = [];
@@ -208,6 +219,14 @@ function buildSystemPrompt(
     );
     sections.push(
       `\nRelevant context from memory (use naturally if it fits):\n${memLines.join('\n')}`,
+    );
+  }
+
+  // Writing prompts (long instruction blocks set by the tenant)
+  const activePrompts = writingPrompts.filter((p) => p.trim().length > 0);
+  if (activePrompts.length > 0) {
+    sections.push(
+      `\nAdditional writing instructions:\n${activePrompts.map((p, i) => `${i + 1}. ${p}`).join('\n\n')}`,
     );
   }
 
@@ -268,19 +287,33 @@ export async function runCopywriter(
     // Embedding not available or no vectors — proceed without memory.
   }
 
-  // 3. Resolve platform spec.
+  // 3. Load writing prompts; auto-generate one if the library is empty.
+  let writingPrompts: string[] = [];
+  try {
+    let rows = await getActiveWritingPrompts(db, tenantId);
+    if (rows.length === 0) {
+      await autoGenerateAndSavePrompt(db, tenantId, ctx.llm.model);
+      rows = await getActiveWritingPrompts(db, tenantId);
+    }
+    writingPrompts = rows.map((r) => r.content);
+  } catch {
+    // Non-fatal — continue without prompts.
+  }
+
+  // 4. Resolve platform spec.
   const platformSpec =
     PLATFORM_SPECS[input.platform.toLowerCase()] ?? DEFAULT_PLATFORM_SPEC;
 
-  // 4. Build the system prompt.
+  // 5. Build the system prompt.
   const systemPrompt = buildSystemPrompt(
     platformSpec,
     profile,
     memoryContext,
+    writingPrompts,
     input.guidelines,
   );
 
-  // 5. Generate drafts via structured LLM output.
+  // 6. Generate drafts via structured LLM output.
   const prompt =
     count === 1
       ? `Write 1 ${platformSpec.displayName} post about: ${input.topic}`
@@ -293,7 +326,7 @@ export async function runCopywriter(
     system: systemPrompt,
   });
 
-  // 6. Map results + compute character counts.
+  // 7. Map results + compute character counts.
   const drafts: CopywriterDraft[] = object.drafts.map((d) => ({
     content: d.content,
     hookType: d.hookType,
