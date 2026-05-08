@@ -9,6 +9,7 @@
 
 import type { DirectActionHandler } from '../../chat/direct_action_handler';
 import type { CadenceConfigService } from '../../stack/cadence-config.service';
+import type { EmailService } from '@gitroom/nestjs-libraries/services/email.service';
 import type { OrchestratorTool } from '../types';
 
 import { createSchedulePostTool } from './schedule_post';
@@ -64,10 +65,13 @@ import { createAddWritingPromptTool } from './add_writing_prompt';
 import { createEditWritingPromptTool } from './edit_writing_prompt';
 import { createDeleteWritingPromptTool } from './delete_writing_prompt';
 import { createToggleWritingPromptTool } from './toggle_writing_prompt';
+import { createDraftApologyPostTool } from './draft_apology_post';
+import { createSendStakeholderAlertTool } from './send_stakeholder_alert';
 
 export interface OrchestratorToolDeps {
   directAction: DirectActionHandler;
   cadenceConfig: CadenceConfigService;
+  emailService: EmailService;
 }
 
 export function buildOrchestratorTools(
@@ -141,6 +145,9 @@ export function buildOrchestratorTools(
     createEditWritingPromptTool() as OrchestratorTool<unknown, unknown>,
     createDeleteWritingPromptTool() as OrchestratorTool<unknown, unknown>,
     createToggleWritingPromptTool() as OrchestratorTool<unknown, unknown>,
+    // ── Slice E.9 — crisis tools ──────────────────────────────────────────────
+    createDraftApologyPostTool() as OrchestratorTool<unknown, unknown>,
+    createSendStakeholderAlertTool({ emailService: deps.emailService }) as OrchestratorTool<unknown, unknown>,
   ];
 }
 
@@ -198,4 +205,6 @@ export {
   createEditWritingPromptTool,
   createDeleteWritingPromptTool,
   createToggleWritingPromptTool,
+  createDraftApologyPostTool,
+  createSendStakeholderAlertTool,
 };

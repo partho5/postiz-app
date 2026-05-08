@@ -44,6 +44,7 @@ import {
   type ChatDraftPreviewEvent,
 } from './direct_action_handler';
 import { CadenceConfigService } from '../stack/cadence-config.service';
+import { EmailService } from '@gitroom/nestjs-libraries/services/email.service';
 import type {
   ChatScheduledListEvent,
   ChatAnalyticsCardEvent,
@@ -116,6 +117,7 @@ export class AutopilotChatService {
     private readonly _prisma: PrismaService,
     private readonly _directAction: DirectActionHandler,
     private readonly _cadenceConfig: CadenceConfigService,
+    private readonly _emailService: EmailService,
   ) {}
 
   /**
@@ -279,6 +281,7 @@ export class AutopilotChatService {
             timezone,
             directAction: this._directAction,
             cadenceConfig: this._cadenceConfig,
+            emailService: this._emailService,
           },
           {
             message: input.content,

@@ -219,6 +219,7 @@ export async function runOrchestrator(
   const registry = buildOrchestratorTools({
     directAction: deps.directAction,
     cadenceConfig: deps.cadenceConfig,
+    emailService: deps.emailService,
   });
   const trace: { name: string; result: OrchestratorToolResult<unknown> }[] = [];
   const tools = adaptToolsForAiSdk(ctx, registry, trace);

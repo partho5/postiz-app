@@ -102,6 +102,7 @@ function makeDeps(overrides: {
       pause: jest.fn().mockResolvedValue(undefined),
       resume: jest.fn().mockResolvedValue(undefined),
     } as any,
+    emailService: { sendEmail: jest.fn() } as any,
   };
 
   return { deps, emitted, startFlow };

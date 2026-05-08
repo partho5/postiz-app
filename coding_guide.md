@@ -1495,7 +1495,7 @@ Bands deliver in priority order. Each numbered item is one slice unless flagged 
 6. [x] **Publishing reliability** — `retry_publish`, `list_publish_errors`, `quarantine_post`.
 7. [x] **Ideation tools** — `suggest_topics`, `fetch_trending`, `generate_content_calendar`, `repurpose_content`. (multi-slice)
 8. [x] **Writing prompts collection** — `ApWritingPrompt` DB model + CRUD tools (`list_writing_prompts`, `add_writing_prompt`, `edit_writing_prompt`, `delete_writing_prompt`, `toggle_writing_prompt`); copywriter injects all active prompts into system prompt; `COPYWRITING_MODEL_IDS` developer constant for model switching. (multi-slice)
-9. [ ] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
+9. [x] **Crisis tools** — `draft_apology_post`, `send_stakeholder_alert`.
 
 #### E.2 — Configs band
 10. [ ] **Growth rules CRUD** — `read_growth_rules`, `upsert_growth_rule`, `delete_growth_rule`.
@@ -1747,6 +1747,30 @@ model ApWritingPrompt {
 
 ---
 
+#### F.E.9 — Crisis tools (`draft_apology_post`, `send_stakeholder_alert`)
+
+**Goal:** Give the LLM two crisis-response tools: one that drafts an apology or clarification post via the LLM, and one that emails all active org members to alert them of a crisis situation.
+
+**Sources:** §B1.6 (`draft_apology_post` ✗, `send_stakeholder_alert` ✗). `pause_all` and `rollback_published_post` are already done; this slice covers the remaining two B1.6 items.
+
+**Files:**
+- NEW `orchestrator/tools/draft_apology_post.ts` + `.spec.ts` — LLM generates an apology/clarification post; optionally pushes to stack; emits `action_result` when `pushToDraft=true`
+- NEW `orchestrator/tools/send_stakeholder_alert.ts` + `.spec.ts` — fetches all active org members from DB, sends email via `EmailService`, emits `action_result`
+- MOD `orchestrator/tools/index.ts` — add `emailService: EmailService` to `OrchestratorToolDeps`; register 2 new tools
+- MOD `agents/orchestrator.ts` — thread `emailService` into `buildOrchestratorTools`
+- MOD `chat/chat.service.ts` — inject `EmailService` (globally available via `@Global() DatabaseModule`); pass to `runOrchestrator`
+
+**Definition of done:**
+- `draft_apology_post`: accepts `situation` (string, what happened), optional `platform` (default `'twitter'`), optional `tone` (`'empathetic'|'formal'|'brief'`, default `'empathetic'`), optional `pushToDraft` (bool, default false); uses LLM + brand profile to draft the post; when `pushToDraft=true` calls `push()` with `source='chat_agent'`, `priority=10` + emits `action_result`; when `pushToDraft=false` returns drafted text in observation (pure read)
+- `send_stakeholder_alert`: accepts `subject`, `message`; queries `db.userOrganization.findMany({ where: { organizationId: ctx.org.id, disabled: false }, include: { user: true } })` to collect emails; calls `emailService.sendEmail(email, subject, html)` for each; emits `action_result` with count of emails attempted; gracefully handles 0 org members; description says "NOT for posting to social media — use schedule_post or draft_apology_post for public posts"
+- `emailService: EmailService` added to `OrchestratorToolDeps`; threaded from `chat.service.ts` → `runOrchestrator` deps → `buildOrchestratorTools(deps)`
+- No new Prisma schema changes
+- All autopilot tests green; each tool ≥ 5 spec cases
+
+**Out of scope:** Automated crisis detection, SMS/webhook alerts, a dedicated stakeholder email-list table (uses org members directly), unpausing after crisis (user calls `resume_posting`), `pause_all` (already done in E.2).
+
+---
+
 ### G. Roadmap build log
 
 2026-04-28 | E.1 | orchestrator/tools/read_time_slots.ts, read_time_slots.spec.ts, orchestrator/tools/index.ts, orchestrator/types.ts, agents/orchestrator.ts, orchestrator/tools/list_scheduled_posts.ts
@@ -1832,6 +1856,7 @@ Append-only. One line per slice completed (or partially completed). Newest at bo
 2026-04-25 | 1.3.f | done | orchestrator/tools/{update_business_profile,set_strategy_optout,save_memory,recall_memory,get_older_history}.ts + *.spec.ts (34 new tests); get_profile.spec.ts; tools/index.ts (18-tool registry); orchestrator/index.ts (re-exports 6 new factories); chat/chat.service.ts (removed parseIntent import + all intent-branching; removed _isCancellationMessage + _buildReplyPrompt; normal flow now calls runOrchestrator directly); chat/chat.service.spec.ts (rewritten to match orchestrator-only routing); 530 autopilot tests green (+34); profile/optout tools use createProposal pipeline (no direct writes)
 2026-04-24 | 1.3.e | done | orchestrator/tools/{analytics_snapshot,research_topic,scrape_competitor}.ts + *.spec.ts (31 new tests); tools/index.ts (12-tool registry); orchestrator/index.ts (re-exports 3 new factories); chat/chat.service.ts (resolve timezone from first active ApCadenceConfig, fallback UTC — fixes 1.3.e TODO); chat/chat.service.spec.ts (apCadenceConfig mock); agents/orchestrator.spec.ts (mock analytics_snapshot skill to break socialIntegrationList import chain under noImplicitReturns); 496 autopilot tests green (+31); analytics_snapshot bridges SkillContext + emits analytics_card; research_topic + scrape_competitor bridge AgentContext + catch errors gracefully
 2026-05-08 | E.8 | done | schema.prisma (ApPromptSource + ApWritingPrompt + Organization back-relation); db push applied; client regenerated; memory/writing-prompts.ts (getActiveWritingPrompts, autoGenerateAndSavePrompt); agents/copywriter.ts (COPYWRITING_MODEL_IDS exported, buildSystemPrompt accepts writingPrompts, runCopywriter loads+auto-generates prompts); orchestrator/tools/{list_writing_prompts,add_writing_prompt,edit_writing_prompt,delete_writing_prompt,toggle_writing_prompt}.ts + *.spec.ts; tools/index.ts (5 new tools registered); copywriter.spec.ts (writing-prompts + COPYWRITING_MODEL_IDS tests added); 714 autopilot tests green (+44)
+2026-05-08 | E.9 | done | orchestrator/tools/{draft_apology_post,send_stakeholder_alert}.ts + *.spec.ts; tools/index.ts (emailService added to OrchestratorToolDeps, 2 new tools registered); agents/orchestrator.ts (emailService threaded into buildOrchestratorTools); chat/chat.service.ts (EmailService injected, passed to runOrchestrator); agents/orchestrator.spec.ts + chat/chat.service.spec.ts (emailService mock added); emails/empty.provider.ts (string[] type annotation fix); 729 autopilot tests green (+15)
 <!-- entries end -->
 
 ---

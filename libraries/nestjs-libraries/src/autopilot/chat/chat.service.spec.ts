@@ -104,7 +104,7 @@ describe('AutopilotChatService — routing', () => {
       cancelAction: jest.fn(),
       continuePending: jest.fn(),
     } as any;
-    const svc = new AutopilotChatService(prisma, directAction, { pause: jest.fn(), resume: jest.fn() } as any);
+    const svc = new AutopilotChatService(prisma, directAction, { pause: jest.fn(), resume: jest.fn() } as any, { sendEmail: jest.fn() } as any);
 
     await svc.handleChat(ORG, USER, { content: 'post about launch' }, () => {});
 
@@ -120,7 +120,7 @@ describe('AutopilotChatService — routing', () => {
       cancelAction: jest.fn(),
       continuePending: jest.fn(),
     } as any;
-    const svc = new AutopilotChatService(prisma, directAction, { pause: jest.fn(), resume: jest.fn() } as any);
+    const svc = new AutopilotChatService(prisma, directAction, { pause: jest.fn(), resume: jest.fn() } as any, { sendEmail: jest.fn() } as any);
 
     await svc.handleChat(ORG, USER, { content: 'hello' }, () => {});
 
@@ -134,6 +134,7 @@ describe('AutopilotChatService — routing', () => {
       prisma,
       { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
       { pause: jest.fn(), resume: jest.fn() } as any,
+      { sendEmail: jest.fn() } as any,
     );
 
     await svc.handleChat(ORG, USER, { content: 'thanks' }, () => {});
@@ -148,6 +149,7 @@ describe('AutopilotChatService — routing', () => {
       prisma,
       { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
       { pause: jest.fn(), resume: jest.fn() } as any,
+      { sendEmail: jest.fn() } as any,
     );
 
     await svc.handleChat(ORG, USER, { content: 'after 5 minutes' }, () => {});
@@ -162,6 +164,7 @@ describe('AutopilotChatService — routing', () => {
       prisma,
       { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
       { pause: jest.fn(), resume: jest.fn() } as any,
+      { sendEmail: jest.fn() } as any,
     );
     mockRunOrchestrator.mockRejectedValue(new Error('llm down'));
 
@@ -181,6 +184,7 @@ describe('AutopilotChatService — routing', () => {
       prisma,
       { startFlow: jest.fn(), cancelAction: jest.fn(), continuePending: jest.fn() } as any,
       { pause: jest.fn(), resume: jest.fn() } as any,
+      { sendEmail: jest.fn() } as any,
     );
     mockRunOrchestrator.mockResolvedValue({
       text: '', // tool already emitted draft_preview
